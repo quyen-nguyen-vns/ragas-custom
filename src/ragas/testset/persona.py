@@ -31,21 +31,32 @@ class Persona(BaseModel):
 class PersonaGenerationPrompt(PydanticPrompt[StringIO, Persona]):
     instruction: str = (
         "Using the provided summary, generate a single persona who would likely "
-        "interact with or benefit from the content. Include a unique name and a "
-        "concise role description of who they are."
+        "interact with or benefit from pest and disease knowledge content. The persona should be "
+        "a professional role (not a specific person's name) who works with or needs knowledge about "
+        "pests, diseases, or related fields. Include a role name "
+        "and a concise description of their expertise and responsibilities related to pest and disease management."
     )
     input_model: t.Type[StringIO] = StringIO
     output_model: t.Type[Persona] = Persona
     examples: t.List[t.Tuple[StringIO, Persona]] = [
         (
             StringIO(
-                text="Guide to Digital Marketing explains strategies for engaging audiences across various online platforms."
+                text="Practical solutions for small-scale farmers dealing with common crop pests and diseases, including cost-effective treatment options and early warning signs to watch for."
             ),
             Persona(
-                name="Digital Marketing Specialist",
-                role_description="Focuses on engaging audiences and growing the brand online.",
+                name="Small-Scale Farmer",
+                role_description="A practical farmer who grows crops on a small to medium scale, needs straightforward advice on identifying and treating pest and disease problems, and asks questions in simple, direct language about what they observe in their fields.",
             ),
-        )
+        ),
+        (
+            StringIO(
+                text="Field-based training materials for agricultural extension workers on pest and disease identification, farmer education programs, and community outreach strategies for sustainable farming practices."
+            ),
+            Persona(
+                name="Agricultural Extension Officer",
+                role_description="Works directly with farmers in rural communities, providing education and training on pest and disease management, translating technical knowledge into practical advice, and helping farmers implement sustainable farming practices.",
+            ),
+        ),
     ]
 
 

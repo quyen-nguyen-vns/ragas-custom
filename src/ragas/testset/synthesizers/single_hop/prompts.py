@@ -29,6 +29,7 @@ class QueryAnswerGenerationPrompt(PydanticPrompt[QueryCondition, GeneratedQueryA
         "that aligns with the persona's perspective and incorporates the term.\n"
         "2. **Generate an Answer**: Using only the content from the provided context, construct a detailed answer "
         "to the query. Do not add any information not included in or inferable from the context.\n"
+        "3. **Language Requirement**: Generate both the query and answer in English only, regardless of the input language. Do not use any Thai words, terms, or phrases. Translate all technical terms to English or use generic English descriptions.\n"
     )
     input_model: t.Type[QueryCondition] = QueryCondition
     output_model: t.Type[GeneratedQueryAnswer] = GeneratedQueryAnswer

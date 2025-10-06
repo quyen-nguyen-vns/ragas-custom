@@ -7,7 +7,7 @@ from ragas.testset.persona import Persona
 
 
 class ThemesPersonasInput(BaseModel):
-    themes: t.List[str]
+    themes: t.Union[t.List[str], t.List[t.List[str]]]
     personas: t.List[Persona]
 
 

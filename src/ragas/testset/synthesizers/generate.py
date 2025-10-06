@@ -1,9 +1,21 @@
 from __future__ import annotations
 
+import json
 import logging
 import random
 import typing as t
 from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from uuid import UUID
+
+try:
+    from langchain_core.tracers import LangChainTracer
+    from langsmith import Client
+
+    LANGSMITH_AVAILABLE = True
+except ImportError:
+    LANGSMITH_AVAILABLE = False
 
 from langchain_core.callbacks import BaseCallbackManager
 from langchain_core.documents import Document as LCDocument
@@ -24,7 +36,7 @@ from ragas.testset.persona import Persona, generate_personas_from_kg
 from ragas.testset.synthesizers import default_query_distribution
 from ragas.testset.synthesizers.testset_schema import Testset, TestsetSample
 from ragas.testset.synthesizers.utils import calculate_split_values
-from ragas.testset.transforms import Transforms, apply_transforms, default_transforms
+from ragas.testset.transforms import Transforms, default_transforms
 
 if t.TYPE_CHECKING:
     from langchain_core.callbacks import Callbacks
@@ -44,6 +56,346 @@ if t.TYPE_CHECKING:
 
 RAGAS_TESTSET_GENERATION_GROUP_NAME = "ragas testset generation"
 logger = logging.getLogger(__name__)
+
+
+class UUIDEncoder(json.JSONEncoder):
+    """Custom JSON encoder to handle UUID serialization."""
+
+    def default(self, obj):
+        if isinstance(obj, UUID):
+            return str(obj)
+        return super().default(obj)
+
+
+class LangSmithTracer:
+    """Helper class for LangSmith tracing integration."""
+
+    def __init__(
+        self, enabled: bool = False, project_name: str = "ragas-testset-generation"
+    ):
+        self.enabled = enabled and LANGSMITH_AVAILABLE
+        self.project_name = project_name
+        self.client = None
+        self.tracer = None
+
+        if self.enabled:
+            try:
+                self.client = Client()
+                self.tracer = LangChainTracer(project_name=project_name)
+                logger.info(
+                    f"LangSmith tracing initialized for project: {project_name}"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to initialize LangSmith tracing: {e}")
+                self.enabled = False
+
+    def get_tracer(self):
+        """Get the LangChain tracer if available."""
+        return self.tracer if self.enabled else None
+
+    def create_run(self, name: str, inputs: dict, run_type: str = "chain"):
+        """Create a custom LangSmith run."""
+        if not self.enabled or not self.client:
+            return None
+
+        try:
+            return self.client.create_run(
+                name=name,
+                inputs=inputs,
+                run_type="chain",  # Use literal string for LangSmith
+                project_name=self.project_name,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to create LangSmith run: {e}")
+            return None
+
+    def update_run(
+        self,
+        run_id: str,
+        outputs: t.Optional[dict] = None,
+        error: t.Optional[str] = None,
+    ):
+        """Update a LangSmith run with outputs or error."""
+        if not self.enabled or not self.client:
+            return
+
+        try:
+            if error:
+                self.client.update_run(run_id, error=error)
+            elif outputs:
+                self.client.update_run(run_id, outputs=outputs)
+        except Exception as e:
+            logger.warning(f"Failed to update LangSmith run: {e}")
+
+
+@dataclass
+class IncrementalSaveConfig:
+    """Configuration for incremental saving during testset generation."""
+
+    enabled: bool = True
+    save_interval: int = 1  # Save after every N samples
+    save_scenarios: bool = True
+    save_samples: bool = True
+    save_partial_datasets: bool = True
+    intermediate_dir: t.Optional[Path] = None
+    cleanup_on_completion: bool = False
+
+
+class IncrementalSaveCallback:
+    """Callback system for saving intermediate results during testset generation."""
+
+    def __init__(self, config: IncrementalSaveConfig):
+        self.config = config
+        self.current_samples = []
+        self.current_scenarios = []
+        self.sample_count = 0
+        self.scenario_count = 0
+
+        # Create intermediate directory structure
+        if self.config.enabled and self.config.intermediate_dir:
+            self._setup_directories()
+
+    def _setup_directories(self):
+        """Create the directory structure for intermediate results."""
+        if self.config.intermediate_dir is None:
+            return
+
+        base_dir = self.config.intermediate_dir
+        base_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create subdirectories for different types of intermediate results
+        (base_dir / "scenarios").mkdir(exist_ok=True)
+        (base_dir / "samples").mkdir(exist_ok=True)
+        (base_dir / "partial_datasets").mkdir(exist_ok=True)
+        (base_dir / "knowledge_graphs").mkdir(exist_ok=True)
+
+    def on_scenario_generated(self, scenario, synthesizer_name: str):
+        """Called when a scenario is generated."""
+        if not self.config.enabled or not self.config.save_scenarios:
+            return
+
+        self.current_scenarios.append(
+            {
+                "scenario": scenario.model_dump()
+                if hasattr(scenario, "model_dump")
+                else scenario.__dict__,
+                "synthesizer_name": synthesizer_name,
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
+
+        self.scenario_count += 1
+
+        # Save scenarios in batches
+        if self.scenario_count % 10 == 0:  # Save every 10 scenarios
+            self._save_scenarios()
+
+    def on_sample_generated(self, sample, synthesizer_name: str):
+        """Called when a sample (question-answer pair) is generated."""
+        if not self.config.enabled or not self.config.save_samples:
+            return
+
+        self.current_samples.append(
+            {
+                "sample": sample.model_dump()
+                if hasattr(sample, "model_dump")
+                else sample.__dict__,
+                "synthesizer_name": synthesizer_name,
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
+
+        self.sample_count += 1
+
+        # Save individual sample
+        if self.config.save_samples:
+            self._save_individual_sample(sample, synthesizer_name)
+
+        # Save partial dataset if interval reached
+        if self.sample_count % self.config.save_interval == 0:
+            self._save_partial_dataset()
+
+    def on_knowledge_graph_updated(self, kg, step_name: str):
+        """Called when knowledge graph is updated at different steps."""
+        if not self.config.enabled or self.config.intermediate_dir is None:
+            return
+
+        kg_path = (
+            self.config.intermediate_dir / "knowledge_graphs" / f"{step_name}_kg.json"
+        )
+        kg.save(kg_path)
+        logger.info(f"Saved knowledge graph at step '{step_name}' to {kg_path}")
+
+    def _save_scenarios(self):
+        """Save current scenarios to file."""
+        if not self.current_scenarios or self.config.intermediate_dir is None:
+            return
+
+        scenarios_path = (
+            self.config.intermediate_dir
+            / "scenarios"
+            / f"scenarios_batch_{self.scenario_count // 10}.json"
+        )
+        with open(scenarios_path, "w", encoding="utf-8") as f:
+            json.dump(
+                self.current_scenarios, f, ensure_ascii=False, indent=2, cls=UUIDEncoder
+            )
+
+        logger.info(
+            f"Saved {len(self.current_scenarios)} scenarios to {scenarios_path}"
+        )
+        self.current_scenarios.clear()
+
+    def _save_individual_sample(self, sample, synthesizer_name: str):
+        """Save individual sample to file."""
+        if self.config.intermediate_dir is None:
+            return
+
+        sample_path = (
+            self.config.intermediate_dir
+            / "samples"
+            / f"sample_{self.sample_count:04d}.json"
+        )
+        sample_data = {
+            "sample": sample.model_dump()
+            if hasattr(sample, "model_dump")
+            else sample.__dict__,
+            "synthesizer_name": synthesizer_name,
+            "sample_number": self.sample_count,
+            "timestamp": datetime.now().isoformat(),
+        }
+
+        with open(sample_path, "w", encoding="utf-8") as f:
+            json.dump(sample_data, f, ensure_ascii=False, indent=2, cls=UUIDEncoder)
+
+    def _save_partial_dataset(self):
+        """Save partial dataset with current samples."""
+        if (
+            not self.config.save_partial_datasets
+            or not self.current_samples
+            or self.config.intermediate_dir is None
+        ):
+            return
+
+        dataset_path = (
+            self.config.intermediate_dir
+            / "partial_datasets"
+            / f"dataset_after_{self.sample_count}_samples.json"
+        )
+
+        # Convert samples to the format expected by the final dataset
+        dataset_data = []
+        for sample_data in self.current_samples:
+            dataset_data.append(
+                {
+                    "user_input": sample_data["sample"].get("user_input", ""),
+                    "reference_contexts": sample_data["sample"].get(
+                        "reference_contexts", []
+                    ),
+                    "reference": sample_data["sample"].get("reference", ""),
+                    "synthesizer_name": sample_data["synthesizer_name"],
+                    "sample_number": sample_data.get("sample_number", 0),
+                    "timestamp": sample_data["timestamp"],
+                }
+            )
+
+        with open(dataset_path, "w", encoding="utf-8") as f:
+            json.dump(dataset_data, f, ensure_ascii=False, indent=2, cls=UUIDEncoder)
+
+        logger.info(
+            f"Saved partial dataset with {len(dataset_data)} samples to {dataset_path}"
+        )
+
+    def finalize(self):
+        """Finalize saving and cleanup if configured."""
+        # Save any remaining scenarios
+        if self.current_scenarios:
+            self._save_scenarios()
+
+        # Save final partial dataset
+        if self.current_samples:
+            self._save_partial_dataset()
+
+        # Cleanup if configured
+        if self.config.cleanup_on_completion:
+            self._cleanup_intermediate_files()
+
+    def _cleanup_intermediate_files(self):
+        """Clean up intermediate files after completion."""
+        if self.config.intermediate_dir and self.config.intermediate_dir.exists():
+            import shutil
+
+            shutil.rmtree(self.config.intermediate_dir)
+            logger.info(
+                f"Cleaned up intermediate directory: {self.config.intermediate_dir}"
+            )
+
+
+class IncrementalExecutor:
+    """Enhanced Executor that supports incremental saving of results."""
+
+    def __init__(self, base_executor, save_callback: IncrementalSaveCallback):
+        self.base_executor = base_executor
+        self.save_callback = save_callback
+        self._original_submit = base_executor.submit
+        self._original_results = base_executor.results
+
+        # Wrap the submit method to track sample generation
+        self._wrap_submit_method()
+
+    def _wrap_submit_method(self):
+        """Wrap the submit method to add incremental saving."""
+        original_submit = self.base_executor.submit
+
+        def wrapped_submit(callable, *args, name=None, **kwargs):
+            # Check if this is a sample generation call
+            if hasattr(callable, "__name__") and "generate_sample" in str(callable):
+                # Wrap the callable to save results incrementally
+                async def wrapped_callable(*inner_args, **inner_kwargs):
+                    result = await callable(*inner_args, **inner_kwargs)
+                    # Extract synthesizer name from the callable
+                    synthesizer_name = "unknown"
+                    if hasattr(callable, "__self__") and hasattr(
+                        callable.__self__, "name"
+                    ):
+                        synthesizer_name = callable.__self__.name
+                    self.save_callback.on_sample_generated(result, synthesizer_name)
+                    return result
+
+                return original_submit(wrapped_callable, *args, name=name, **kwargs)
+            else:
+                return original_submit(callable, *args, name=name, **kwargs)
+
+        self.base_executor.submit = wrapped_submit
+
+    def submit(self, callable, *args, name=None, **kwargs):
+        """Submit a job with incremental saving support."""
+        return self.base_executor.submit(callable, *args, name=name, **kwargs)
+
+    def results(self):
+        """Get results and finalize saving."""
+        try:
+            results = self.base_executor.results()
+            return results
+        finally:
+            # Finalize saving after all results are collected
+            self.save_callback.finalize()
+
+    def cancel(self):
+        """Cancel execution."""
+        return self.base_executor.cancel()
+
+    def is_cancelled(self):
+        """Check if cancelled."""
+        return self.base_executor.is_cancelled()
+
+    def clear_jobs(self):
+        """Clear jobs."""
+        return self.base_executor.clear_jobs()
+
+    def __getattr__(self, name):
+        """Delegate other attributes to the base executor."""
+        return getattr(self.base_executor, name)
 
 
 @dataclass
@@ -111,7 +463,11 @@ class TestsetGenerator:
         with_debugging_logs=False,
         raise_exceptions: bool = True,
         return_executor: bool = False,
-    ) -> t.Union[Testset, Executor]:
+        kg_name: str = "knowledge_graph_test.json",
+        dataset_name: str = "data_test",
+        incremental_save_config: t.Optional[IncrementalSaveConfig] = None,
+        num_personas: int = 3,
+    ) -> t.Union[Testset, Executor, IncrementalExecutor]:
         """
         Generates an evaluation dataset based on given Langchain documents and parameters.
 
@@ -166,6 +522,36 @@ class TestsetGenerator:
                 """An embedding client was not provided. Provide an embedding through the transforms_embedding_model parameter. Alternatively you can provide your own transforms through the `transforms` parameter."""
             )
 
+        # Setup LangSmith tracing for knowledge graph creation
+        langsmith_tracer = None
+        try:
+            from src.settings import settings
+
+            if (
+                settings.langsmith_api_key
+                and settings.langsmith_tracing.lower() == "true"
+            ):
+                langsmith_tracer = LangSmithTracer(
+                    enabled=True, project_name=settings.langsmith_project
+                )
+                logger.info("LangSmith tracing enabled for knowledge graph creation")
+        except Exception as e:
+            logger.warning(f"Failed to setup LangSmith tracing for KG creation: {e}")
+
+        # Create LangSmith run for knowledge graph creation
+        kg_creation_run = None
+        if langsmith_tracer:
+            kg_creation_run = langsmith_tracer.create_run(
+                name="Knowledge Graph Creation",
+                inputs={
+                    "num_documents": len(documents),
+                    "document_sources": [
+                        doc.metadata.get("source", "unknown") for doc in documents
+                    ],
+                    "kg_name": kg_name,
+                },
+            )
+
         if not transforms:
             transforms = default_transforms(
                 documents=list(documents),
@@ -185,11 +571,72 @@ class TestsetGenerator:
             )
             nodes.append(node)
 
+        # Create knowledge graph with nodes
         kg = KnowledgeGraph(nodes=nodes)
 
-        # apply transforms and update the knowledge graph
-        apply_transforms(kg, transforms)
-        self.knowledge_graph = kg
+        # Add LangSmith tracer to callbacks if available
+        enhanced_callbacks = callbacks or []
+        langsmith_tracer_obj = (
+            langsmith_tracer.get_tracer() if langsmith_tracer else None
+        )
+        if langsmith_tracer_obj:
+            if isinstance(enhanced_callbacks, BaseCallbackManager):
+                enhanced_callbacks.add_handler(langsmith_tracer_obj)
+            else:
+                enhanced_callbacks.append(langsmith_tracer_obj)
+
+        try:
+            # Apply transforms to enrich the knowledge graph
+            if kg_name.endswith(".json"):
+                knowledge_graph_json_path = settings.kg_store_dir / kg_name
+            else:
+                knowledge_graph_json_path = settings.kg_store_dir / f"{kg_name}.json"
+            if not knowledge_graph_json_path.exists():
+                from ragas.testset.transforms import apply_transforms
+
+                apply_transforms(kg, transforms, callbacks=enhanced_callbacks)
+                self.knowledge_graph = kg
+
+                # Save the knowledge graph
+                from src.settings import settings
+
+                self.knowledge_graph.save(knowledge_graph_json_path)
+                logger.info(f"Knowledge graph saved to: {knowledge_graph_json_path}")
+            else:
+                self.knowledge_graph = KnowledgeGraph.load(knowledge_graph_json_path)
+                logger.info(f"Knowledge graph loaded from: {knowledge_graph_json_path}")
+
+            # Update LangSmith run with success
+            if kg_creation_run and langsmith_tracer:
+                langsmith_tracer.update_run(
+                    kg_creation_run.id,
+                    outputs={
+                        "kg_created": True,
+                        "total_nodes": len(self.knowledge_graph.nodes),
+                        "total_relationships": len(self.knowledge_graph.relationships),
+                        "kg_file_path": str(knowledge_graph_json_path),
+                        "node_types": list(
+                            set(node.type.value for node in self.knowledge_graph.nodes)
+                        ),
+                        "extracted_properties": list(
+                            set(
+                                prop
+                                for node in self.knowledge_graph.nodes
+                                for prop in node.properties.keys()
+                            )
+                        ),
+                    },
+                )
+                logger.info(
+                    "LangSmith run updated with knowledge graph creation results"
+                )
+
+        except Exception as e:
+            # Update LangSmith run with error
+            if kg_creation_run and langsmith_tracer:
+                langsmith_tracer.update_run(kg_creation_run.id, error=str(e))
+            logger.error(f"Failed to create knowledge graph: {e}")
+            raise
 
         return self.generate(
             testset_size=testset_size,
@@ -199,6 +646,9 @@ class TestsetGenerator:
             with_debugging_logs=with_debugging_logs,
             raise_exceptions=raise_exceptions,
             return_executor=return_executor,
+            incremental_save_config=incremental_save_config,
+            dataset_name=dataset_name,
+            num_personas=num_personas,
         )
 
     def generate_with_llamaindex_docs(
@@ -213,6 +663,7 @@ class TestsetGenerator:
         callbacks: t.Optional[Callbacks] = None,
         with_debugging_logs=False,
         raise_exceptions: bool = True,
+        dataset_name: str = "data_test",
     ):
         """
         Generates an evaluation dataset based on given scenarios and parameters.
@@ -265,6 +716,8 @@ class TestsetGenerator:
 
         kg = KnowledgeGraph(nodes=nodes)
 
+        from ragas.testset.transforms import apply_transforms
+
         # apply transforms and update the knowledge graph
         apply_transforms(kg, transforms, run_config)
         self.knowledge_graph = kg
@@ -277,6 +730,7 @@ class TestsetGenerator:
             with_debugging_logs=with_debugging_logs,
             raise_exceptions=raise_exceptions,
             return_executor=False,  # Default value for llamaindex_docs method
+            dataset_name=dataset_name,
         )
 
     def generate(
@@ -291,7 +745,9 @@ class TestsetGenerator:
         with_debugging_logs=False,
         raise_exceptions: bool = True,
         return_executor: bool = False,
-    ) -> t.Union[Testset, Executor]:
+        incremental_save_config: t.Optional[IncrementalSaveConfig] = None,
+        dataset_name: str = "data_test",
+    ) -> t.Union[Testset, Executor, IncrementalExecutor]:
         """
         Generate an evaluation dataset based on given scenarios and parameters.
 
@@ -322,6 +778,9 @@ class TestsetGenerator:
             If True, returns the Executor instance instead of running generation.
             The returned executor can be used to cancel execution by calling executor.cancel().
             To get results, call executor.results().
+        incremental_save_config : Optional[IncrementalSaveConfig], optional
+            Configuration for incremental saving of intermediate results during generation.
+            If provided, enables step-by-step saving of scenarios, samples, and partial datasets.
 
         Returns
         -------
@@ -337,9 +796,43 @@ class TestsetGenerator:
         3. Calculate split values for different scenario types.
         4. Generate samples for each scenario.
         5. Compile the results into an EvaluationDataset.
+
+        If incremental_save_config is provided, intermediate results are saved at each step.
         """
         if run_config is not None:
             self.llm.set_run_config(run_config)
+
+        # Setup incremental saving if configured
+        save_callback = None
+        if incremental_save_config:
+            # Set default intermediate directory from settings if not provided
+            if incremental_save_config.intermediate_dir is None:
+                from src.settings import settings
+
+                incremental_save_config.intermediate_dir = (
+                    settings.intermediate_dir / dataset_name
+                )
+
+            save_callback = IncrementalSaveCallback(incremental_save_config)
+            logger.info(
+                f"Incremental saving enabled. Intermediate results will be saved to: {incremental_save_config.intermediate_dir}"
+            )
+
+        # Setup LangSmith tracing
+        langsmith_tracer = None
+        try:
+            from src.settings import settings
+
+            if (
+                settings.langsmith_api_key
+                and settings.langsmith_tracing.lower() == "true"
+            ):
+                langsmith_tracer = LangSmithTracer(
+                    enabled=True, project_name=settings.langsmith_project
+                )
+                logger.info("LangSmith tracing enabled for testset generation")
+        except Exception as e:
+            logger.warning(f"Failed to setup LangSmith tracing: {e}")
 
         query_distribution = query_distribution or default_query_distribution(
             self.llm, self.knowledge_graph
@@ -364,6 +857,16 @@ class TestsetGenerator:
             else:
                 callbacks.append(cb)
 
+        # Add LangSmith tracer to callbacks if available
+        langsmith_tracer_obj = (
+            langsmith_tracer.get_tracer() if langsmith_tracer else None
+        )
+        if langsmith_tracer_obj:
+            if isinstance(callbacks, BaseCallbackManager):
+                callbacks.add_handler(langsmith_tracer_obj)
+            else:
+                callbacks.append(langsmith_tracer_obj)
+
         # new group for Testset Generation
         testset_generation_rm, testset_generation_grp = new_group(
             name=RAGAS_TESTSET_GENERATION_GROUP_NAME,
@@ -379,15 +882,77 @@ class TestsetGenerator:
             patch_logger("ragas.experimental.testset.graph", logging.DEBUG)
             patch_logger("ragas.experimental.testset.transforms", logging.DEBUG)
 
-        if self.persona_list is None:
-            self.persona_list = generate_personas_from_kg(
-                llm=self.llm,
-                kg=self.knowledge_graph,
-                num_personas=num_personas,
-                callbacks=callbacks,
+        # Save knowledge graph after persona generation setup
+        if save_callback:
+            save_callback.on_knowledge_graph_updated(
+                self.knowledge_graph, "after_persona_setup"
+            )
+
+        # Create LangSmith run for persona generation
+        persona_run = None
+        if langsmith_tracer:
+            persona_run = langsmith_tracer.create_run(
+                name="Persona Generation",
+                inputs={
+                    "num_personas": num_personas,
+                    "knowledge_graph_nodes": len(self.knowledge_graph.nodes),
+                    "knowledge_graph_relationships": len(
+                        self.knowledge_graph.relationships
+                    ),
+                },
+            )
+
+        try:
+            if self.persona_list is None:
+                self.persona_list = generate_personas_from_kg(
+                    llm=self.llm,
+                    kg=self.knowledge_graph,
+                    num_personas=num_personas,
+                    callbacks=callbacks,
+                )
+            else:
+                random.shuffle(self.persona_list)
+
+            # Update LangSmith run with success
+            if persona_run and langsmith_tracer:
+                langsmith_tracer.update_run(
+                    persona_run.id,
+                    outputs={
+                        "personas_generated": len(self.persona_list),
+                        "persona_names": [p.name for p in self.persona_list],
+                    },
+                )
+        except Exception as e:
+            # Update LangSmith run with error
+            if persona_run and langsmith_tracer:
+                langsmith_tracer.update_run(persona_run.id, error=str(e))
+            raise
+
+        # ================================================================
+        # Save self.persona_list into a JSON file for inspection or reuse
+        import json
+
+        from src.settings import settings
+
+        # Use the same intermediate directory as the incremental save config
+        if incremental_save_config and incremental_save_config.intermediate_dir:
+            persona_json_path = (
+                incremental_save_config.intermediate_dir / "persona_list.json"
             )
         else:
-            random.shuffle(self.persona_list)
+            persona_json_path = (
+                settings.intermediate_dir / dataset_name / "persona_list.json"
+            )
+
+        # Create the directory first
+        persona_json_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Convert persona_list to serializable format (list of dicts)
+        persona_data = [p.model_dump() for p in self.persona_list]
+
+        with open(persona_json_path, "w", encoding="utf-8") as f:
+            json.dump(persona_data, f, ensure_ascii=False, indent=2, cls=UUIDEncoder)
+        # ================================================================
 
         splits, _ = calculate_split_values(
             [prob for _, prob in query_distribution], testset_size
@@ -399,35 +964,116 @@ class TestsetGenerator:
             callbacks=testset_generation_grp,
         )
 
+        # Create LangSmith run for scenario generation
+        scenario_run = None
+        if langsmith_tracer:
+            scenario_run = langsmith_tracer.create_run(
+                name="Scenario Generation",
+                inputs={
+                    "testset_size": testset_size,
+                    "query_distribution": [
+                        synthesizer.name for synthesizer, _ in query_distribution
+                    ],
+                    "splits": splits,
+                },
+            )
+
         # generate scenarios
-        exec = Executor(
+        base_exec = Executor(
             desc="Generating Scenarios",
             raise_exceptions=raise_exceptions,
             run_config=run_config,
             keep_progress_bar=False,
             batch_size=batch_size,
         )
+
+        # Wrap with IncrementalExecutor if saving is enabled
+        if save_callback:
+            exec = IncrementalExecutor(base_exec, save_callback)
+        else:
+            exec = base_exec
         # generate samples
         splits, _ = calculate_split_values(
             [prob for _, prob in query_distribution], testset_size
         )
         for i, (scenario, _) in enumerate(query_distribution):
-            exec.submit(
-                scenario.generate_scenarios,
-                n=splits[i],
-                knowledge_graph=self.knowledge_graph,
-                persona_list=self.persona_list[:num_personas],
-                callbacks=scenario_generation_grp,
-            )
+            # Wrap scenario generation to save scenarios incrementally
+            if save_callback:
+
+                async def wrapped_scenario_generation(
+                    synthesizer, n, kg, personas, callbacks
+                ):
+                    scenarios = await synthesizer._generate_scenarios(
+                        n, kg, personas, callbacks
+                    )
+                    # Save each scenario
+                    for scenario_obj in scenarios:
+                        save_callback.on_scenario_generated(
+                            scenario_obj, synthesizer.name
+                        )
+                    return scenarios
+
+                exec.submit(
+                    wrapped_scenario_generation,
+                    scenario,
+                    splits[i],
+                    self.knowledge_graph,
+                    self.persona_list[:num_personas],
+                    scenario_generation_grp,
+                )
+            else:
+                exec.submit(
+                    scenario._generate_scenarios,
+                    splits[i],
+                    self.knowledge_graph,
+                    self.persona_list[:num_personas],
+                    scenario_generation_grp,
+                )
 
         try:
             scenario_sample_list: t.List[t.List[BaseScenario]] = exec.results()
+
+            # Update LangSmith run with scenario generation results
+            if scenario_run and langsmith_tracer:
+                total_scenarios = sum(
+                    len(scenarios) for scenarios in scenario_sample_list
+                )
+                langsmith_tracer.update_run(
+                    scenario_run.id,
+                    outputs={
+                        "scenarios_generated": total_scenarios,
+                        "scenarios_per_synthesizer": [
+                            len(scenarios) for scenarios in scenario_sample_list
+                        ],
+                        "synthesizer_names": [
+                            synthesizer.name for synthesizer, _ in query_distribution
+                        ],
+                    },
+                )
         except Exception as e:
+            # Update LangSmith run with error
+            if scenario_run and langsmith_tracer:
+                langsmith_tracer.update_run(scenario_run.id, error=str(e))
             scenario_generation_rm.on_chain_error(e)
             raise e
         else:
             scenario_generation_rm.on_chain_end(
                 outputs={"scenario_sample_list": scenario_sample_list}
+            )
+
+        # Create LangSmith run for sample generation
+        sample_run = None
+        if langsmith_tracer:
+            total_scenarios = sum(len(scenarios) for scenarios in scenario_sample_list)
+            sample_run = langsmith_tracer.create_run(
+                name="Sample Generation",
+                inputs={
+                    "total_scenarios": total_scenarios,
+                    "testset_size": testset_size,
+                    "scenarios_per_synthesizer": [
+                        len(scenarios) for scenarios in scenario_sample_list
+                    ],
+                },
             )
 
         # new group for Generation of Samples
@@ -436,13 +1082,19 @@ class TestsetGenerator:
             inputs={"scenario_sample_list": scenario_sample_list},
             callbacks=testset_generation_grp,
         )
-        exec = Executor(
+        base_sample_exec = Executor(
             "Generating Samples",
             raise_exceptions=raise_exceptions,
             run_config=run_config,
             keep_progress_bar=True,
             batch_size=batch_size,
         )
+
+        # Wrap with IncrementalExecutor if saving is enabled
+        if save_callback:
+            exec = IncrementalExecutor(base_sample_exec, save_callback)
+        else:
+            exec = base_sample_exec
         additional_testset_info: t.List[t.Dict] = []
         for i, (synthesizer, _) in enumerate(query_distribution):
             for sample in scenario_sample_list[i]:
@@ -464,11 +1116,39 @@ class TestsetGenerator:
 
         try:
             eval_samples = exec.results()
+
+            # Update LangSmith run with sample generation results
+            if sample_run and langsmith_tracer:
+                langsmith_tracer.update_run(
+                    sample_run.id,
+                    outputs={
+                        "samples_generated": len(eval_samples),
+                        "samples_per_synthesizer": [
+                            info.get("synthesizer_name", "unknown")
+                            for info in additional_testset_info
+                        ],
+                        "testset_size_achieved": len(eval_samples),
+                    },
+                )
         except Exception as e:
+            # Update LangSmith run with error
+            if sample_run and langsmith_tracer:
+                langsmith_tracer.update_run(sample_run.id, error=str(e))
             sample_generation_rm.on_chain_error(e)
             raise e
         else:
             sample_generation_rm.on_chain_end(outputs={"eval_samples": eval_samples})
+
+        # Create final LangSmith run for testset completion
+        final_run = None
+        if langsmith_tracer:
+            final_run = langsmith_tracer.create_run(
+                name="Testset Generation Complete",
+                inputs={
+                    "testset_size": testset_size,
+                    "total_samples": len(eval_samples),
+                },
+            )
 
         # build the testset
         testsets = []
@@ -476,6 +1156,25 @@ class TestsetGenerator:
             testsets.append(TestsetSample(eval_sample=sample, **additional_info))
         testset = Testset(samples=testsets, cost_cb=cost_cb)
         testset_generation_rm.on_chain_end({"testset": testset})
+
+        # Update final LangSmith run
+        if final_run and langsmith_tracer:
+            langsmith_tracer.update_run(
+                final_run.id,
+                outputs={
+                    "testset_completed": True,
+                    "final_sample_count": len(testsets),
+                    "synthesizer_distribution": {
+                        info.get("synthesizer_name", "unknown"): sum(
+                            1
+                            for ai in additional_testset_info
+                            if ai.get("synthesizer_name")
+                            == info.get("synthesizer_name")
+                        )
+                        for info in additional_testset_info
+                    },
+                },
+            )
 
         # tracking how many samples were generated
         track(

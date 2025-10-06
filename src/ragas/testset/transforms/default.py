@@ -106,8 +106,8 @@ def default_transforms(
         cosine_sim_builder = CosineSimilarityBuilder(
             property_name="summary_embedding",
             new_property_name="summary_similarity",
-            threshold=0.7,
-            filter_nodes=lambda node: filter_doc_with_num_tokens(node),
+            threshold=0.1,
+            filter_nodes=lambda node: filter_docs(node),
         )
 
         ner_overlap_sim = OverlapScoreBuilder(
@@ -139,8 +139,8 @@ def default_transforms(
         cosine_sim_builder = CosineSimilarityBuilder(
             property_name="summary_embedding",
             new_property_name="summary_similarity",
-            threshold=0.5,
-            filter_nodes=lambda node: filter_doc_with_num_tokens(node, 100),
+            threshold=0.1,
+            filter_nodes=lambda node: filter_docs(node),
         )
 
         ner_extractor = NERExtractor(llm=llm)

@@ -21,12 +21,13 @@ dependencies = [
     "pillow>=10.4.0",
     "networkx",
     "scikit-network",
-
     # LangChain ecosystem
     "langchain",
     "langchain-core",
     "langchain-community",
     "langchain_openai",
+    "langchain-google-genai>=2.1.12",
+    "loguru>=0.7.3",
 ]
 dynamic = ["version", "readme"]
 

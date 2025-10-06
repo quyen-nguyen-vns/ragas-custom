@@ -84,7 +84,8 @@ class QueryAnswerGenerationPrompt(
         "the query. Avoid adding information that is not directly present or inferable from the given context.\n"
         "3. **Multi-Hop Context Tags**:\n"
         "   - Each context segment is tagged as `<1-hop>`, `<2-hop>`, etc.\n"
-        "   - Ensure the query uses information from at least two segments and connects them meaningfully."
+        "   - Ensure the query uses information from at least two segments and connects them meaningfully.\n"
+        "4. **Language Requirement**: Generate both the query and answer in English only, regardless of the input language. Do not use any Thai words, terms, or phrases. Translate all technical terms to English or use generic English descriptions."
     )
     input_model: t.Type[QueryConditions] = QueryConditions
     output_model: t.Type[GeneratedQueryAnswer] = GeneratedQueryAnswer
