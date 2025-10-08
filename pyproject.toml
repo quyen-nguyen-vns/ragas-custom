@@ -28,6 +28,9 @@ dependencies = [
     "langchain_openai",
     "langchain-google-genai>=2.1.12",
     "loguru>=0.7.3",
+    "langfuse==2.60.10",
+    "neo4j>=5.28.2",
+    "baml-py>=0.210.0",
 ]
 dynamic = ["version", "readme"]
 
@@ -53,7 +56,7 @@ all = [
 ]
 
 # Specific integrations
-tracing = ["langfuse>=3.2.4", "mlflow>=3.1.4"]
+tracing = ["langfuse==2.60.10", "mlflow>=3.1.4"]
 gdrive = [
     "google-api-python-client>=2.178.0",
     "google-auth>=2.40.3",
@@ -166,8 +169,6 @@ dev = [
     "unstructured[md]",
     "arize-phoenix>=6.1.0",
     "openinference-instrumentation-langchain>=0.1.29",
-    # Include all optional features
-    "ragas[all,tracing,gdrive,ai-frameworks]",
 ]
 docs = [
     "mkdocs>=1.6.1",

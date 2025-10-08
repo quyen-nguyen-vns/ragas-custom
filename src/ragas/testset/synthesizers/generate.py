@@ -9,14 +9,6 @@ from datetime import datetime
 from pathlib import Path
 from uuid import UUID
 
-try:
-    from langchain_core.tracers import LangChainTracer
-    from langsmith import Client
-
-    LANGSMITH_AVAILABLE = True
-except ImportError:
-    LANGSMITH_AVAILABLE = False
-
 from langchain_core.callbacks import BaseCallbackManager
 from langchain_core.documents import Document as LCDocument
 
@@ -65,67 +57,6 @@ class UUIDEncoder(json.JSONEncoder):
         if isinstance(obj, UUID):
             return str(obj)
         return super().default(obj)
-
-
-class LangSmithTracer:
-    """Helper class for LangSmith tracing integration."""
-
-    def __init__(
-        self, enabled: bool = False, project_name: str = "ragas-testset-generation"
-    ):
-        self.enabled = enabled and LANGSMITH_AVAILABLE
-        self.project_name = project_name
-        self.client = None
-        self.tracer = None
-
-        if self.enabled:
-            try:
-                self.client = Client()
-                self.tracer = LangChainTracer(project_name=project_name)
-                logger.info(
-                    f"LangSmith tracing initialized for project: {project_name}"
-                )
-            except Exception as e:
-                logger.warning(f"Failed to initialize LangSmith tracing: {e}")
-                self.enabled = False
-
-    def get_tracer(self):
-        """Get the LangChain tracer if available."""
-        return self.tracer if self.enabled else None
-
-    def create_run(self, name: str, inputs: dict, run_type: str = "chain"):
-        """Create a custom LangSmith run."""
-        if not self.enabled or not self.client:
-            return None
-
-        try:
-            return self.client.create_run(
-                name=name,
-                inputs=inputs,
-                run_type="chain",  # Use literal string for LangSmith
-                project_name=self.project_name,
-            )
-        except Exception as e:
-            logger.warning(f"Failed to create LangSmith run: {e}")
-            return None
-
-    def update_run(
-        self,
-        run_id: str,
-        outputs: t.Optional[dict] = None,
-        error: t.Optional[str] = None,
-    ):
-        """Update a LangSmith run with outputs or error."""
-        if not self.enabled or not self.client:
-            return
-
-        try:
-            if error:
-                self.client.update_run(run_id, error=error)
-            elif outputs:
-                self.client.update_run(run_id, outputs=outputs)
-        except Exception as e:
-            logger.warning(f"Failed to update LangSmith run: {e}")
 
 
 @dataclass
@@ -190,7 +121,18 @@ class IncrementalSaveCallback:
         if self.scenario_count % 10 == 0:  # Save every 10 scenarios
             self._save_scenarios()
 
-    def on_sample_generated(self, sample, synthesizer_name: str):
+    def on_sample_generated(
+        self,
+        sample,
+        synthesizer_name: str,
+        persona_name: str = "",
+        query_style: str = "",
+        query_length: str = "",
+        source_node_ids: t.Optional[t.List[str]] = None,
+        source_node_types: t.Optional[t.List[str]] = None,
+        source_document_metadata: t.Optional[t.List[dict]] = None,
+        source_content_preview: t.Optional[t.List[str]] = None,
+    ):
         """Called when a sample (question-answer pair) is generated."""
         if not self.config.enabled or not self.config.save_samples:
             return
@@ -201,6 +143,13 @@ class IncrementalSaveCallback:
                 if hasattr(sample, "model_dump")
                 else sample.__dict__,
                 "synthesizer_name": synthesizer_name,
+                "persona_name": persona_name,
+                "query_style": query_style,
+                "query_length": query_length,
+                "source_node_ids": source_node_ids or [],
+                "source_node_types": source_node_types or [],
+                "source_document_metadata": source_document_metadata or [],
+                "source_content_preview": source_content_preview or [],
                 "timestamp": datetime.now().isoformat(),
             }
         )
@@ -209,7 +158,17 @@ class IncrementalSaveCallback:
 
         # Save individual sample
         if self.config.save_samples:
-            self._save_individual_sample(sample, synthesizer_name)
+            self._save_individual_sample(
+                sample,
+                synthesizer_name,
+                persona_name,
+                query_style,
+                query_length,
+                source_node_ids,
+                source_node_types,
+                source_document_metadata,
+                source_content_preview,
+            )
 
         # Save partial dataset if interval reached
         if self.sample_count % self.config.save_interval == 0:
@@ -246,7 +205,18 @@ class IncrementalSaveCallback:
         )
         self.current_scenarios.clear()
 
-    def _save_individual_sample(self, sample, synthesizer_name: str):
+    def _save_individual_sample(
+        self,
+        sample,
+        synthesizer_name: str,
+        persona_name: str = "",
+        query_style: str = "",
+        query_length: str = "",
+        source_node_ids: t.Optional[t.List[str]] = None,
+        source_node_types: t.Optional[t.List[str]] = None,
+        source_document_metadata: t.Optional[t.List[dict]] = None,
+        source_content_preview: t.Optional[t.List[str]] = None,
+    ):
         """Save individual sample to file."""
         if self.config.intermediate_dir is None:
             return
@@ -261,6 +231,13 @@ class IncrementalSaveCallback:
             if hasattr(sample, "model_dump")
             else sample.__dict__,
             "synthesizer_name": synthesizer_name,
+            "persona_name": persona_name,
+            "query_style": query_style,
+            "query_length": query_length,
+            "source_node_ids": source_node_ids or [],
+            "source_node_types": source_node_types or [],
+            "source_document_metadata": source_document_metadata or [],
+            "source_content_preview": source_content_preview or [],
             "sample_number": self.sample_count,
             "timestamp": datetime.now().isoformat(),
         }
@@ -294,6 +271,17 @@ class IncrementalSaveCallback:
                     ),
                     "reference": sample_data["sample"].get("reference", ""),
                     "synthesizer_name": sample_data["synthesizer_name"],
+                    "persona_name": sample_data.get("persona_name", ""),
+                    "query_style": sample_data.get("query_style", ""),
+                    "query_length": sample_data.get("query_length", ""),
+                    "source_node_ids": sample_data.get("source_node_ids", []),
+                    "source_node_types": sample_data.get("source_node_types", []),
+                    "source_document_metadata": sample_data.get(
+                        "source_document_metadata", []
+                    ),
+                    "source_content_preview": sample_data.get(
+                        "source_content_preview", []
+                    ),
                     "sample_number": sample_data.get("sample_number", 0),
                     "timestamp": sample_data["timestamp"],
                 }
@@ -350,6 +338,40 @@ class IncrementalExecutor:
         def wrapped_submit(callable, *args, name=None, **kwargs):
             # Check if this is a sample generation call
             if hasattr(callable, "__name__") and "generate_sample" in str(callable):
+                # Extract persona name, style, length, and source info from the scenario argument
+                persona_name = ""
+                query_style = ""
+                query_length = ""
+                source_node_ids = []
+                source_node_types = []
+                source_document_metadata = []
+                source_content_preview = []
+
+                if len(args) > 0 and hasattr(args[0], "persona"):
+                    persona_name = args[0].persona.name
+                if len(args) > 0 and hasattr(args[0], "style"):
+                    query_style = args[0].style.value
+                if len(args) > 0 and hasattr(args[0], "length"):
+                    query_length = args[0].length.value
+                if (
+                    len(args) > 0
+                    and hasattr(args[0], "nodes")
+                    and len(args[0].nodes) > 0
+                ):
+                    # Extract info from all nodes (for both single-hop and multi-hop)
+                    for node in args[0].nodes:
+                        source_node_ids.append(str(node.id))
+                        source_node_types.append(node.type.value)
+                        source_metadata = node.properties.get("document_metadata", {})
+                        source_document_metadata.append(source_metadata)
+                        source_content = node.properties.get("page_content", "")
+                        preview = (
+                            source_content[:200] + "..."
+                            if len(source_content) > 200
+                            else source_content
+                        )
+                        source_content_preview.append(preview)
+
                 # Wrap the callable to save results incrementally
                 async def wrapped_callable(*inner_args, **inner_kwargs):
                     result = await callable(*inner_args, **inner_kwargs)
@@ -359,7 +381,17 @@ class IncrementalExecutor:
                         callable.__self__, "name"
                     ):
                         synthesizer_name = callable.__self__.name
-                    self.save_callback.on_sample_generated(result, synthesizer_name)
+                    self.save_callback.on_sample_generated(
+                        result,
+                        synthesizer_name,
+                        persona_name,
+                        query_style,
+                        query_length,
+                        source_node_ids,
+                        source_node_types,
+                        source_document_metadata,
+                        source_content_preview,
+                    )
                     return result
 
                 return original_submit(wrapped_callable, *args, name=name, **kwargs)
@@ -522,36 +554,6 @@ class TestsetGenerator:
                 """An embedding client was not provided. Provide an embedding through the transforms_embedding_model parameter. Alternatively you can provide your own transforms through the `transforms` parameter."""
             )
 
-        # Setup LangSmith tracing for knowledge graph creation
-        langsmith_tracer = None
-        try:
-            from src.settings import settings
-
-            if (
-                settings.langsmith_api_key
-                and settings.langsmith_tracing.lower() == "true"
-            ):
-                langsmith_tracer = LangSmithTracer(
-                    enabled=True, project_name=settings.langsmith_project
-                )
-                logger.info("LangSmith tracing enabled for knowledge graph creation")
-        except Exception as e:
-            logger.warning(f"Failed to setup LangSmith tracing for KG creation: {e}")
-
-        # Create LangSmith run for knowledge graph creation
-        kg_creation_run = None
-        if langsmith_tracer:
-            kg_creation_run = langsmith_tracer.create_run(
-                name="Knowledge Graph Creation",
-                inputs={
-                    "num_documents": len(documents),
-                    "document_sources": [
-                        doc.metadata.get("source", "unknown") for doc in documents
-                    ],
-                    "kg_name": kg_name,
-                },
-            )
-
         if not transforms:
             transforms = default_transforms(
                 documents=list(documents),
@@ -574,69 +576,30 @@ class TestsetGenerator:
         # Create knowledge graph with nodes
         kg = KnowledgeGraph(nodes=nodes)
 
-        # Add LangSmith tracer to callbacks if available
-        enhanced_callbacks = callbacks or []
-        langsmith_tracer_obj = (
-            langsmith_tracer.get_tracer() if langsmith_tracer else None
-        )
-        if langsmith_tracer_obj:
-            if isinstance(enhanced_callbacks, BaseCallbackManager):
-                enhanced_callbacks.add_handler(langsmith_tracer_obj)
-            else:
-                enhanced_callbacks.append(langsmith_tracer_obj)
+        # Apply transforms to enrich the knowledge graph
+        from src.settings import settings
 
-        try:
-            # Apply transforms to enrich the knowledge graph
-            if kg_name.endswith(".json"):
-                knowledge_graph_json_path = settings.kg_store_dir / kg_name
-            else:
-                knowledge_graph_json_path = settings.kg_store_dir / f"{kg_name}.json"
-            if not knowledge_graph_json_path.exists():
-                from ragas.testset.transforms import apply_transforms
+        if kg_name.endswith(".json"):
+            knowledge_graph_json_path = settings.kg_store_dir / kg_name
+        else:
+            knowledge_graph_json_path = settings.kg_store_dir / f"{kg_name}.json"
+        if not knowledge_graph_json_path.exists():
+            logger.info("Applying transforms to the knowledge graph...")
+            from ragas.testset.transforms import apply_transforms
 
-                apply_transforms(kg, transforms, callbacks=enhanced_callbacks)
-                self.knowledge_graph = kg
+            apply_transforms(kg, transforms, callbacks=callbacks)
+            self.knowledge_graph = kg
 
-                # Save the knowledge graph
-                from src.settings import settings
+            # Save the knowledge graph
+            logger.info("Saving the knowledge graph...")
+            self.knowledge_graph.save(knowledge_graph_json_path)
+            logger.info(f"Knowledge graph saved to: {knowledge_graph_json_path}")
+            exit()
+        else:
+            self.knowledge_graph = KnowledgeGraph.load(knowledge_graph_json_path)
+            logger.info(f"Knowledge graph loaded from: {knowledge_graph_json_path}")
 
-                self.knowledge_graph.save(knowledge_graph_json_path)
-                logger.info(f"Knowledge graph saved to: {knowledge_graph_json_path}")
-            else:
-                self.knowledge_graph = KnowledgeGraph.load(knowledge_graph_json_path)
-                logger.info(f"Knowledge graph loaded from: {knowledge_graph_json_path}")
-
-            # Update LangSmith run with success
-            if kg_creation_run and langsmith_tracer:
-                langsmith_tracer.update_run(
-                    kg_creation_run.id,
-                    outputs={
-                        "kg_created": True,
-                        "total_nodes": len(self.knowledge_graph.nodes),
-                        "total_relationships": len(self.knowledge_graph.relationships),
-                        "kg_file_path": str(knowledge_graph_json_path),
-                        "node_types": list(
-                            set(node.type.value for node in self.knowledge_graph.nodes)
-                        ),
-                        "extracted_properties": list(
-                            set(
-                                prop
-                                for node in self.knowledge_graph.nodes
-                                for prop in node.properties.keys()
-                            )
-                        ),
-                    },
-                )
-                logger.info(
-                    "LangSmith run updated with knowledge graph creation results"
-                )
-
-        except Exception as e:
-            # Update LangSmith run with error
-            if kg_creation_run and langsmith_tracer:
-                langsmith_tracer.update_run(kg_creation_run.id, error=str(e))
-            logger.error(f"Failed to create knowledge graph: {e}")
-            raise
+        logger.info("Knowledge graph created successfully!")
 
         return self.generate(
             testset_size=testset_size,
@@ -818,22 +781,6 @@ class TestsetGenerator:
                 f"Incremental saving enabled. Intermediate results will be saved to: {incremental_save_config.intermediate_dir}"
             )
 
-        # Setup LangSmith tracing
-        langsmith_tracer = None
-        try:
-            from src.settings import settings
-
-            if (
-                settings.langsmith_api_key
-                and settings.langsmith_tracing.lower() == "true"
-            ):
-                langsmith_tracer = LangSmithTracer(
-                    enabled=True, project_name=settings.langsmith_project
-                )
-                logger.info("LangSmith tracing enabled for testset generation")
-        except Exception as e:
-            logger.warning(f"Failed to setup LangSmith tracing: {e}")
-
         query_distribution = query_distribution or default_query_distribution(
             self.llm, self.knowledge_graph
         )
@@ -857,16 +804,6 @@ class TestsetGenerator:
             else:
                 callbacks.append(cb)
 
-        # Add LangSmith tracer to callbacks if available
-        langsmith_tracer_obj = (
-            langsmith_tracer.get_tracer() if langsmith_tracer else None
-        )
-        if langsmith_tracer_obj:
-            if isinstance(callbacks, BaseCallbackManager):
-                callbacks.add_handler(langsmith_tracer_obj)
-            else:
-                callbacks.append(langsmith_tracer_obj)
-
         # new group for Testset Generation
         testset_generation_rm, testset_generation_grp = new_group(
             name=RAGAS_TESTSET_GENERATION_GROUP_NAME,
@@ -888,45 +825,15 @@ class TestsetGenerator:
                 self.knowledge_graph, "after_persona_setup"
             )
 
-        # Create LangSmith run for persona generation
-        persona_run = None
-        if langsmith_tracer:
-            persona_run = langsmith_tracer.create_run(
-                name="Persona Generation",
-                inputs={
-                    "num_personas": num_personas,
-                    "knowledge_graph_nodes": len(self.knowledge_graph.nodes),
-                    "knowledge_graph_relationships": len(
-                        self.knowledge_graph.relationships
-                    ),
-                },
+        if self.persona_list is None:
+            self.persona_list = generate_personas_from_kg(
+                llm=self.llm,
+                kg=self.knowledge_graph,
+                num_personas=num_personas,
+                callbacks=callbacks,
             )
-
-        try:
-            if self.persona_list is None:
-                self.persona_list = generate_personas_from_kg(
-                    llm=self.llm,
-                    kg=self.knowledge_graph,
-                    num_personas=num_personas,
-                    callbacks=callbacks,
-                )
-            else:
-                random.shuffle(self.persona_list)
-
-            # Update LangSmith run with success
-            if persona_run and langsmith_tracer:
-                langsmith_tracer.update_run(
-                    persona_run.id,
-                    outputs={
-                        "personas_generated": len(self.persona_list),
-                        "persona_names": [p.name for p in self.persona_list],
-                    },
-                )
-        except Exception as e:
-            # Update LangSmith run with error
-            if persona_run and langsmith_tracer:
-                langsmith_tracer.update_run(persona_run.id, error=str(e))
-            raise
+        else:
+            random.shuffle(self.persona_list)
 
         # ================================================================
         # Save self.persona_list into a JSON file for inspection or reuse
@@ -963,20 +870,6 @@ class TestsetGenerator:
             inputs={"splits": splits},
             callbacks=testset_generation_grp,
         )
-
-        # Create LangSmith run for scenario generation
-        scenario_run = None
-        if langsmith_tracer:
-            scenario_run = langsmith_tracer.create_run(
-                name="Scenario Generation",
-                inputs={
-                    "testset_size": testset_size,
-                    "query_distribution": [
-                        synthesizer.name for synthesizer, _ in query_distribution
-                    ],
-                    "splits": splits,
-                },
-            )
 
         # generate scenarios
         base_exec = Executor(
@@ -1032,48 +925,12 @@ class TestsetGenerator:
 
         try:
             scenario_sample_list: t.List[t.List[BaseScenario]] = exec.results()
-
-            # Update LangSmith run with scenario generation results
-            if scenario_run and langsmith_tracer:
-                total_scenarios = sum(
-                    len(scenarios) for scenarios in scenario_sample_list
-                )
-                langsmith_tracer.update_run(
-                    scenario_run.id,
-                    outputs={
-                        "scenarios_generated": total_scenarios,
-                        "scenarios_per_synthesizer": [
-                            len(scenarios) for scenarios in scenario_sample_list
-                        ],
-                        "synthesizer_names": [
-                            synthesizer.name for synthesizer, _ in query_distribution
-                        ],
-                    },
-                )
         except Exception as e:
-            # Update LangSmith run with error
-            if scenario_run and langsmith_tracer:
-                langsmith_tracer.update_run(scenario_run.id, error=str(e))
             scenario_generation_rm.on_chain_error(e)
             raise e
         else:
             scenario_generation_rm.on_chain_end(
                 outputs={"scenario_sample_list": scenario_sample_list}
-            )
-
-        # Create LangSmith run for sample generation
-        sample_run = None
-        if langsmith_tracer:
-            total_scenarios = sum(len(scenarios) for scenarios in scenario_sample_list)
-            sample_run = langsmith_tracer.create_run(
-                name="Sample Generation",
-                inputs={
-                    "total_scenarios": total_scenarios,
-                    "testset_size": testset_size,
-                    "scenarios_per_synthesizer": [
-                        len(scenarios) for scenarios in scenario_sample_list
-                    ],
-                },
             )
 
         # new group for Generation of Samples
@@ -1103,10 +960,36 @@ class TestsetGenerator:
                     scenario=sample,
                     callbacks=sample_generation_grp,
                 )
+                # Extract source information from all nodes (for both single-hop and multi-hop)
+                source_node_ids = []
+                source_node_types = []
+                source_document_metadata = []
+                source_content_preview = []
+
+                for node in sample.nodes:
+                    source_node_ids.append(str(node.id))
+                    source_node_types.append(node.type.value)
+                    source_metadata = node.properties.get("document_metadata", {})
+                    source_document_metadata.append(source_metadata)
+                    source_content = node.properties.get("page_content", "")
+                    preview = (
+                        source_content[:200] + "..."
+                        if len(source_content) > 200
+                        else source_content
+                    )
+                    source_content_preview.append(preview)
+
                 # fill out the additional info for the TestsetSample
                 additional_testset_info.append(
                     {
                         "synthesizer_name": synthesizer.name,
+                        "persona_name": sample.persona.name,
+                        "query_style": sample.style.value,
+                        "query_length": sample.length.value,
+                        "source_node_ids": source_node_ids,
+                        "source_node_types": source_node_types,
+                        "source_document_metadata": source_document_metadata,
+                        "source_content_preview": source_content_preview,
                     }
                 )
 
@@ -1116,39 +999,11 @@ class TestsetGenerator:
 
         try:
             eval_samples = exec.results()
-
-            # Update LangSmith run with sample generation results
-            if sample_run and langsmith_tracer:
-                langsmith_tracer.update_run(
-                    sample_run.id,
-                    outputs={
-                        "samples_generated": len(eval_samples),
-                        "samples_per_synthesizer": [
-                            info.get("synthesizer_name", "unknown")
-                            for info in additional_testset_info
-                        ],
-                        "testset_size_achieved": len(eval_samples),
-                    },
-                )
         except Exception as e:
-            # Update LangSmith run with error
-            if sample_run and langsmith_tracer:
-                langsmith_tracer.update_run(sample_run.id, error=str(e))
             sample_generation_rm.on_chain_error(e)
             raise e
         else:
             sample_generation_rm.on_chain_end(outputs={"eval_samples": eval_samples})
-
-        # Create final LangSmith run for testset completion
-        final_run = None
-        if langsmith_tracer:
-            final_run = langsmith_tracer.create_run(
-                name="Testset Generation Complete",
-                inputs={
-                    "testset_size": testset_size,
-                    "total_samples": len(eval_samples),
-                },
-            )
 
         # build the testset
         testsets = []
@@ -1156,25 +1011,6 @@ class TestsetGenerator:
             testsets.append(TestsetSample(eval_sample=sample, **additional_info))
         testset = Testset(samples=testsets, cost_cb=cost_cb)
         testset_generation_rm.on_chain_end({"testset": testset})
-
-        # Update final LangSmith run
-        if final_run and langsmith_tracer:
-            langsmith_tracer.update_run(
-                final_run.id,
-                outputs={
-                    "testset_completed": True,
-                    "final_sample_count": len(testsets),
-                    "synthesizer_distribution": {
-                        info.get("synthesizer_name", "unknown"): sum(
-                            1
-                            for ai in additional_testset_info
-                            if ai.get("synthesizer_name")
-                            == info.get("synthesizer_name")
-                        )
-                        for info in additional_testset_info
-                    },
-                },
-            )
 
         # tracking how many samples were generated
         track(

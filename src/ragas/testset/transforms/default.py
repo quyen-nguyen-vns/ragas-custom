@@ -106,8 +106,8 @@ def default_transforms(
         cosine_sim_builder = CosineSimilarityBuilder(
             property_name="summary_embedding",
             new_property_name="summary_similarity",
-            threshold=0.1,
-            filter_nodes=lambda node: filter_docs(node),
+            threshold=0.7,
+            filter_nodes=lambda node: filter_doc_with_num_tokens(node),
         )
 
         ner_overlap_sim = OverlapScoreBuilder(
@@ -123,7 +123,8 @@ def default_transforms(
             summary_extractor,
             node_filter,
             Parallel(summary_emb_extractor, theme_extractor, ner_extractor),
-            Parallel(cosine_sim_builder, ner_overlap_sim),
+            cosine_sim_builder,  # Run after embeddings are created
+            ner_overlap_sim,  # Can run independently
         ]
     elif result["101-500"] >= 0.25:
         summary_extractor = SummaryExtractor(
@@ -139,8 +140,8 @@ def default_transforms(
         cosine_sim_builder = CosineSimilarityBuilder(
             property_name="summary_embedding",
             new_property_name="summary_similarity",
-            threshold=0.1,
-            filter_nodes=lambda node: filter_docs(node),
+            threshold=0.5,
+            filter_nodes=lambda node: filter_doc_with_num_tokens(node, 100),
         )
 
         ner_extractor = NERExtractor(llm=llm)
@@ -154,7 +155,8 @@ def default_transforms(
             summary_extractor,
             node_filter,
             Parallel(summary_emb_extractor, theme_extractor, ner_extractor),
-            Parallel(cosine_sim_builder, ner_overlap_sim),
+            cosine_sim_builder,  # Run after embeddings are created
+            ner_overlap_sim,  # Can run independently
         ]
     else:
         raise ValueError(

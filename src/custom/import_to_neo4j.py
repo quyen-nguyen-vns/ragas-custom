@@ -85,7 +85,7 @@ class Neo4jImporter:
                     n += $properties
                 """
 
-                session.run(query, id=node["id"], type=node_type, properties=properties)
+                session.run(query, id=node["id"], type=node_type, properties=properties)  # type: ignore
 
                 count += 1
                 if count % 100 == 0:
@@ -124,7 +124,7 @@ class Neo4jImporter:
                 """
 
                 session.run(
-                    query,
+                    query,  # type: ignore
                     source_id=rel["source"],
                     target_id=rel["target"],
                     properties=properties,
@@ -203,7 +203,7 @@ def main():
 
     try:
         # Load knowledge graph
-        kg_data = load_knowledge_graph("knowledge_graph_test.json")
+        kg_data = load_knowledge_graph("cache/data/kg/pad_17doc_dedup.json")
 
         # Initialize importer
         importer = Neo4jImporter(NEO4J_URI, NEO4J_USERNAME, NEO4J_PASSWORD)

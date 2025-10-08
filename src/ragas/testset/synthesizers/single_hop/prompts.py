@@ -2,8 +2,8 @@ import typing as t
 
 from pydantic import BaseModel
 
-from ragas.prompt import PydanticPrompt
 from ragas.testset.persona import Persona
+from ragas.testset.synthesizers.baml_parser import BAMLEnhancedPrompt
 
 
 class QueryCondition(BaseModel):
@@ -19,7 +19,9 @@ class GeneratedQueryAnswer(BaseModel):
     answer: str
 
 
-class QueryAnswerGenerationPrompt(PydanticPrompt[QueryCondition, GeneratedQueryAnswer]):
+class QueryAnswerGenerationPrompt(
+    BAMLEnhancedPrompt[QueryCondition, GeneratedQueryAnswer]
+):
     instruction: str = (
         "Generate a single-hop query and answer based on the specified conditions (persona, term, style, length) "
         "and the provided context. Ensure the answer is entirely faithful to the context, using only the information "

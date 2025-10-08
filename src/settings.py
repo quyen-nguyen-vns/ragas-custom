@@ -44,12 +44,13 @@ class LLMSettings(ProjectBaseSettings):
     gemini_api_key: str = ""
 
 
-class LangSmithSettings(ProjectBaseSettings):
-    """Settings for LangSmith observability."""
+class LangFuseSettings(ProjectBaseSettings):
+    """Settings for LangFuse observability."""
 
-    langsmith_api_key: str = ""
-    langsmith_tracing: str = "false"
-    langsmith_project: str = "ragas-testset-generation"
+    langfuse_secret_key: str = ""
+    langfuse_public_key: str = ""
+    langfuse_host: str = "https://cloud.langfuse.com"
+    langfuse_tracing: str = "false"
 
 
 class AWSSettings(ProjectBaseSettings):
@@ -71,7 +72,7 @@ class DynamoDBSettings(ProjectBaseSettings):
     dynamodb_table_name_indexing: str = "documents-indexing"
 
 
-class ProjectSettings(LLMSettings, LangSmithSettings, AWSSettings, DynamoDBSettings):
+class ProjectSettings(LLMSettings, LangFuseSettings, AWSSettings, DynamoDBSettings):
     """Application settings.
 
     These parameters can be configured

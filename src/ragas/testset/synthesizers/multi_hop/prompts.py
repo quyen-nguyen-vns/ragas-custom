@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 
 from ragas.prompt import PydanticPrompt
 from ragas.testset.persona import Persona
+from ragas.testset.synthesizers.baml_parser import BAMLEnhancedPrompt
 
 
 class ConceptsList(BaseModel):
@@ -69,7 +70,7 @@ class GeneratedQueryAnswer(BaseModel):
 
 
 class QueryAnswerGenerationPrompt(
-    PydanticPrompt[QueryConditions, GeneratedQueryAnswer]
+    BAMLEnhancedPrompt[QueryConditions, GeneratedQueryAnswer]
 ):
     instruction: str = (
         "Generate a multi-hop query and answer based on the specified conditions (persona, themes, style, length) "

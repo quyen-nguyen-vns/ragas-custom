@@ -27,10 +27,31 @@ class TestsetSample(BaseSample):
         The evaluation sample, which can be either a single-turn or multi-turn sample.
     synthesizer_name : str
         The name of the synthesizer used to generate this sample.
+    persona_name : str
+        The name of the persona used to generate this sample.
+    query_style : str
+        The style of the query used to generate this sample.
+    query_length : str
+        The length of the query used to generate this sample.
+    source_node_ids : list
+        List of IDs of the source nodes used to generate this sample.
+    source_node_types : list
+        List of types of the source nodes (document or chunk).
+    source_document_metadata : list
+        List of metadata from the original documents (file path, source, etc.).
+    source_content_preview : list
+        List of previews of the source content used (first 200 characters each).
     """
 
     eval_sample: t.Union[SingleTurnSample, MultiTurnSample]
     synthesizer_name: str
+    persona_name: str = ""
+    query_style: str = ""
+    query_length: str = ""
+    source_node_ids: t.List[str] = Field(default_factory=list)
+    source_node_types: t.List[str] = Field(default_factory=list)
+    source_document_metadata: t.List[dict] = Field(default_factory=list)
+    source_content_preview: t.List[str] = Field(default_factory=list)
 
 
 class TestsetPacket(BaseModel):
@@ -74,6 +95,13 @@ class Testset(RagasDataset[TestsetSample]):
         for sample in self.samples:
             sample_dict = sample.eval_sample.model_dump(exclude_none=True)
             sample_dict["synthesizer_name"] = sample.synthesizer_name
+            sample_dict["persona_name"] = sample.persona_name
+            sample_dict["query_style"] = sample.query_style
+            sample_dict["query_length"] = sample.query_length
+            sample_dict["source_node_ids"] = sample.source_node_ids
+            sample_dict["source_node_types"] = sample.source_node_types
+            sample_dict["source_document_metadata"] = sample.source_document_metadata
+            sample_dict["source_content_preview"] = sample.source_content_preview
             list_dict.append(sample_dict)
         return list_dict
 
@@ -86,8 +114,22 @@ class Testset(RagasDataset[TestsetSample]):
         samples = []
         for sample in data:
             synthesizer_name = sample["synthesizer_name"]
-            # remove the synthesizer name from the sample
+            persona_name = sample.get("persona_name", "")
+            query_style = sample.get("query_style", "")
+            query_length = sample.get("query_length", "")
+            source_node_ids = sample.get("source_node_ids", [])
+            source_node_types = sample.get("source_node_types", [])
+            source_document_metadata = sample.get("source_document_metadata", [])
+            source_content_preview = sample.get("source_content_preview", [])
+            # remove the synthesizer name, persona name, query_style, query_length, and source fields from the sample
             sample.pop("synthesizer_name")
+            sample.pop("persona_name", None)
+            sample.pop("query_style", None)
+            sample.pop("query_length", None)
+            sample.pop("source_node_ids", None)
+            sample.pop("source_node_types", None)
+            sample.pop("source_document_metadata", None)
+            sample.pop("source_content_preview", None)
             # the remaining sample is the eval_sample
             eval_sample = sample
 
@@ -101,7 +143,15 @@ class Testset(RagasDataset[TestsetSample]):
 
             samples.append(
                 TestsetSample(
-                    eval_sample=eval_sample, synthesizer_name=synthesizer_name
+                    eval_sample=eval_sample,
+                    synthesizer_name=synthesizer_name,
+                    persona_name=persona_name,
+                    query_style=query_style,
+                    query_length=query_length,
+                    source_node_ids=source_node_ids,
+                    source_node_types=source_node_types,
+                    source_document_metadata=source_document_metadata,
+                    source_content_preview=source_content_preview,
                 )
             )
         # then create the testset
