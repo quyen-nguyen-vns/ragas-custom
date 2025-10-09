@@ -52,8 +52,13 @@ async def run_testset_generation(
     testset_size: int,
     llm_name: str,
     embedding_model_name: str,
+    languages: Optional[List[str]] = None,
 ):
     """Main function to generate test dataset."""
+
+    # Set default languages if not provided
+    if languages is None:
+        languages = ["en"]
 
     # Setup LangFuse tracing via environment variables
     langfuse_handler = None
@@ -164,7 +169,7 @@ async def run_testset_generation(
 
     try:
         # Generate dataset with tracing
-        dataset = generator.generate_with_langchain_docs(
+        dataset = await generator.generate_with_langchain_docs(
             docs,
             testset_size=testset_size,
             query_distribution=distribution,
@@ -173,6 +178,8 @@ async def run_testset_generation(
             dataset_name=dataset_name,
             num_personas=3,
             callbacks=callbacks,
+            raise_exceptions=False,  # Don't raise exceptions, handle them gracefully
+            languages=languages,
         )
         # Log the type of dataset returned
         logger.info(f"Dataset type: {type(dataset)}")
@@ -183,7 +190,8 @@ async def run_testset_generation(
 
     except Exception as e:
         logger.error(f"❌ Error during testset generation: {e}")
-        raise  # Re-raise the exception after logging
+        # Don't re-raise the exception, let the process continue
+        logger.warning("Continuing with partial dataset generation...")
     finally:
         # Always flush LangFuse traces, even if there was an error
         if langfuse_handler:
@@ -205,28 +213,66 @@ async def save_dataset(dataset, dataset_name: str):
     output_dir = settings.dataset_dir
     output_dir.mkdir(exist_ok=True)
 
-    # Convert dataset to JSON format
-    if hasattr(dataset, "to_pandas"):
-        df = dataset.to_pandas()
-        data = df.to_dict("records")
-        conversion_method = "pandas"
-    else:
-        # If dataset doesn't have to_pandas method, create data manually
-        data = []
-        for i, item in enumerate(dataset):
-            if hasattr(item, "__dict__"):
-                data.append(item.__dict__)
-            else:
-                data.append({"index": i, "content": str(item)})
-        conversion_method = "manual"
+    try:
+        # Convert dataset to JSON format
+        if hasattr(dataset, "to_pandas"):
+            df = dataset.to_pandas()
+            data = df.to_dict("records")
+            conversion_method = "pandas"
+        elif hasattr(dataset, "samples"):
+            # Handle Testset object
+            data = []
+            for sample in dataset.samples:
+                if hasattr(sample, "eval_sample"):
+                    # Handle TestsetSample
+                    eval_sample = sample.eval_sample
+                    sample_data = {
+                        "question": eval_sample.question,
+                        "answer": eval_sample.answer,
+                        "contexts": eval_sample.contexts,
+                        "ground_truth": eval_sample.ground_truth,
+                        "persona_name": getattr(sample, "persona_name", "unknown"),
+                        "synthesizer_name": getattr(
+                            sample, "synthesizer_name", "unknown"
+                        ),
+                        "query_style": getattr(sample, "query_style", "unknown"),
+                        "query_length": getattr(sample, "query_length", "unknown"),
+                    }
+                    data.append(sample_data)
+                else:
+                    # Handle other sample types
+                    data.append(sample.__dict__)
+            conversion_method = "testset_samples"
+        else:
+            # If dataset doesn't have to_pandas method, create data manually
+            data = []
+            for i, item in enumerate(dataset):
+                if hasattr(item, "__dict__"):
+                    data.append(item.__dict__)
+                else:
+                    data.append({"index": i, "content": str(item)})
+            conversion_method = "manual"
 
-    # Save to JSON
-    json_path = output_dir / f"{dataset_name}.json"
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+        # Check if we have any data to save
+        if not data:
+            logger.warning("No data to save - dataset is empty")
+            return
 
-    logger.info(f"💾 Dataset saved to: {json_path}")
-    logger.info(f"📊 Saved {len(data)} samples using {conversion_method} method")
+        # Save to JSON
+        json_path = output_dir / f"{dataset_name}.json"
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+        logger.info(f"💾 Dataset saved to: {json_path}")
+        logger.info(f"📊 Saved {len(data)} samples using {conversion_method} method")
+
+    except Exception as e:
+        logger.error(f"❌ Error saving dataset: {e}")
+        logger.error(f"Dataset type: {type(dataset)}")
+        logger.error(
+            f"Dataset attributes: {dir(dataset) if hasattr(dataset, '__dict__') else 'No attributes'}"
+        )
+        raise
 
 
 if __name__ == "__main__":
@@ -235,9 +281,13 @@ if __name__ == "__main__":
     input_name = "input_17_pest_and_disease"
     kg_name = "pad_17doc_dedup"
     testset_size = 100
-    dataset_name = f"pad_17doc_{testset_size}_1"
+    index = 0
+    dataset_name = f"pad_17doc_perfect_grammar_th_{testset_size}_{index}"
     llm_name = "gemini-2.0-flash"
     embedding_model_name = "models/text-embedding-004"
+    # Configure languages - add "th" for Thai translations
+    languages = ["en", "th"]  # English and Thai
+
     asyncio.run(
         run_testset_generation(
             input_name=input_name,
@@ -246,5 +296,6 @@ if __name__ == "__main__":
             testset_size=testset_size,
             llm_name=llm_name,
             embedding_model_name=embedding_model_name,
+            languages=languages,
         )
     )

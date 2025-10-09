@@ -11,6 +11,11 @@ from pydantic import BaseModel
 from ragas.llms import BaseRagasLLM
 from ragas.prompt import PydanticPrompt
 
+# Import for type hints only
+if t.TYPE_CHECKING:
+    from langchain_core.callbacks.base import Callbacks
+    from langchain_core.language_models.base import BaseLanguageModel
+
 # Type variables for generics
 InputModel = t.TypeVar("InputModel", bound=BaseModel)
 OutputModel = t.TypeVar("OutputModel", bound=BaseModel)
@@ -84,36 +89,6 @@ class BAMLRobustParser:
         return "\n".join(fixed_lines)
 
     @staticmethod
-    def extract_json_object(text: str) -> t.Optional[dict]:
-        """Extract JSON object from text, handling various formats."""
-        text = text.strip()
-
-        # Try direct parsing first
-        try:
-            fixed_text = BAMLRobustParser.fix_json_string(text)
-            return json.loads(fixed_text)
-        except json.JSONDecodeError:
-            pass
-
-        # Try to find JSON object in the text
-        start_idx = text.find("{")
-        end_idx = text.rfind("}")
-
-        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-            json_str = text[start_idx : end_idx + 1]
-            try:
-                fixed_json = BAMLRobustParser.fix_json_string(json_str)
-                return json.loads(fixed_json)
-            except json.JSONDecodeError:
-                pass
-
-        # Last resort: try to extract key-value pairs manually
-        try:
-            return BAMLRobustParser.extract_key_values(text)
-        except Exception:
-            return None
-
-    @staticmethod
     def extract_key_values(text: str) -> dict:
         """Extract key-value pairs from text manually."""
         result = {}
@@ -150,6 +125,74 @@ class BAMLRobustParser:
 
         raise ValueError("Could not extract query and answer from text")
 
+    @staticmethod
+    def clean_corrupted_text(text: str) -> str:
+        """Clean up corrupted or garbled text from LLM outputs."""
+        # Remove common corruption patterns
+        import re
+
+        # Remove sequences of random characters that look like corruption
+        # Pattern: letter followed by random characters and numbers
+        text = re.sub(r"[a-zA-Z]\d+[a-zA-Z]*\d*[a-zA-Z]*", "", text)
+
+        # Remove sequences like "3u'lwse 3 ij'lwss 0"
+        text = re.sub(
+            r"\d+[a-zA-Z]*\'[a-zA-Z]*\s+\d+\s+[a-zA-Z]*\'[a-zA-Z]*\s+\d+", "", text
+        )
+
+        # Remove sequences of random letters and numbers
+        text = re.sub(r"[a-zA-Z]{1,2}\d+[a-zA-Z]*\d*[a-zA-Z]*", "", text)
+
+        # Clean up multiple spaces
+        text = re.sub(r"\s+", " ", text)
+
+        # Remove leading/trailing whitespace
+        text = text.strip()
+
+        return text
+
+    @staticmethod
+    def extract_json_object(text: str) -> t.Optional[dict]:
+        """Extract JSON object from text, handling various formats."""
+        text = text.strip()
+
+        # Try direct parsing first
+        try:
+            fixed_text = BAMLRobustParser.fix_json_string(text)
+            return json.loads(fixed_text)
+        except json.JSONDecodeError:
+            pass
+
+        # Try to find JSON object in the text
+        start_idx = text.find("{")
+        end_idx = text.rfind("}")
+
+        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+            json_str = text[start_idx : end_idx + 1]
+            try:
+                fixed_json = BAMLRobustParser.fix_json_string(json_str)
+                return json.loads(fixed_json)
+            except json.JSONDecodeError:
+                pass
+
+        # Try cleaning corrupted text and parsing again
+        try:
+            cleaned_text = BAMLRobustParser.clean_corrupted_text(text)
+            if cleaned_text != text:  # Only if we actually cleaned something
+                try:
+                    fixed_text = BAMLRobustParser.fix_json_string(cleaned_text)
+                    return json.loads(fixed_text)
+                except json.JSONDecodeError:
+                    pass
+        except Exception:
+            pass
+
+        # Last resort: try to extract key-value pairs manually
+        try:
+            return BAMLRobustParser.extract_key_values(text)
+        except Exception:
+            return None
+
 
 class BAMLEnhancedPrompt(
     PydanticPrompt[InputModel, OutputModel], t.Generic[InputModel, OutputModel]
@@ -158,6 +201,10 @@ class BAMLEnhancedPrompt(
     Enhanced PydanticPrompt that uses BAML-style robust parsing.
     Supports generic type parameters for input and output models.
     """
+
+    def format(self, data: InputModel) -> str:
+        """Format the prompt with the given data."""
+        return self.to_string(data)
 
     async def parse_output_string(  # type: ignore[override]
         self,
@@ -183,3 +230,48 @@ class BAMLEnhancedPrompt(
             except Exception:
                 # If robust parser also fails, raise the original error
                 raise original_error
+
+    async def generate(
+        self,
+        llm: t.Union[BaseRagasLLM, "BaseLanguageModel"],
+        data: InputModel,
+        temperature: t.Optional[float] = None,
+        stop: t.Optional[t.List[str]] = None,
+        callbacks: t.Optional["Callbacks"] = None,
+        retries_left: int = 3,
+    ) -> OutputModel:
+        """Override generate method to use robust parsing for LangChain LLMs."""
+
+        # Call the parent generate method
+        result = await super().generate(
+            llm=llm,
+            data=data,
+            temperature=temperature,
+            stop=stop,
+            callbacks=callbacks,
+            retries_left=retries_left,
+        )
+        return result
+
+    async def generate_multiple(
+        self,
+        llm: t.Union[BaseRagasLLM, "BaseLanguageModel"],
+        data: InputModel,
+        n: int = 1,
+        temperature: t.Optional[float] = None,
+        stop: t.Optional[t.List[str]] = None,
+        callbacks: t.Optional["Callbacks"] = None,
+        retries_left: int = 3,
+    ) -> t.List[OutputModel]:
+        """Override generate_multiple method to use robust parsing."""
+        # Call the parent generate_multiple method
+        result = await super().generate_multiple(
+            llm=llm,
+            data=data,
+            n=n,
+            temperature=temperature,
+            stop=stop,
+            callbacks=callbacks,
+            retries_left=retries_left,
+        )
+        return result

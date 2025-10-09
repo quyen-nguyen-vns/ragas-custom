@@ -34,10 +34,10 @@ class QueryStyle(str, Enum):
     Enumeration of query styles. Available options are: MISSPELLED, PERFECT_GRAMMAR, POOR_GRAMMAR, WEB_SEARCH_LIKE
     """
 
-    MISSPELLED = "Misspelled queries"
+    # MISSPELLED = "Misspelled queries"
     PERFECT_GRAMMAR = "Perfect grammar"
-    POOR_GRAMMAR = "Poor grammar"
-    WEB_SEARCH_LIKE = "Web search like queries"
+    # POOR_GRAMMAR = "Poor grammar"
+    # WEB_SEARCH_LIKE = "Web search like queries"
 
 
 class BaseScenario(BaseModel):

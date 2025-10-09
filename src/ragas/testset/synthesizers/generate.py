@@ -14,6 +14,8 @@ from langchain_core.documents import Document as LCDocument
 
 from ragas._analytics import TestsetGenerationEvent, track
 from ragas.callbacks import new_group
+
+logger = logging.getLogger(__name__)
 from ragas.cost import TokenUsageParser
 from ragas.embeddings.base import (
     BaseRagasEmbeddings,
@@ -27,6 +29,7 @@ from ragas.testset.graph import KnowledgeGraph, Node, NodeType
 from ragas.testset.persona import Persona, generate_personas_from_kg
 from ragas.testset.synthesizers import default_query_distribution
 from ragas.testset.synthesizers.testset_schema import Testset, TestsetSample
+from ragas.testset.synthesizers.translator import MultiLanguageTranslator
 from ragas.testset.synthesizers.utils import calculate_split_values
 from ragas.testset.transforms import Transforms, default_transforms
 
@@ -482,7 +485,7 @@ class TestsetGenerator:
             knowledge_graph,
         )
 
-    def generate_with_langchain_docs(
+    async def generate_with_langchain_docs(
         self,
         documents: t.Sequence[LCDocument],
         testset_size: int,
@@ -499,6 +502,7 @@ class TestsetGenerator:
         dataset_name: str = "data_test",
         incremental_save_config: t.Optional[IncrementalSaveConfig] = None,
         num_personas: int = 3,
+        languages: t.Optional[t.List[str]] = None,
     ) -> t.Union[Testset, Executor, IncrementalExecutor]:
         """
         Generates an evaluation dataset based on given Langchain documents and parameters.
@@ -601,7 +605,7 @@ class TestsetGenerator:
 
         logger.info("Knowledge graph created successfully!")
 
-        return self.generate(
+        return await self.generate(
             testset_size=testset_size,
             query_distribution=query_distribution,
             run_config=run_config,
@@ -612,6 +616,7 @@ class TestsetGenerator:
             incremental_save_config=incremental_save_config,
             dataset_name=dataset_name,
             num_personas=num_personas,
+            languages=languages,
         )
 
     def generate_with_llamaindex_docs(
@@ -696,7 +701,7 @@ class TestsetGenerator:
             dataset_name=dataset_name,
         )
 
-    def generate(
+    async def generate(
         self,
         testset_size: int,
         query_distribution: t.Optional[QueryDistribution] = None,
@@ -710,6 +715,7 @@ class TestsetGenerator:
         return_executor: bool = False,
         incremental_save_config: t.Optional[IncrementalSaveConfig] = None,
         dataset_name: str = "data_test",
+        languages: t.Optional[t.List[str]] = None,
     ) -> t.Union[Testset, Executor, IncrementalExecutor]:
         """
         Generate an evaluation dataset based on given scenarios and parameters.
@@ -1009,6 +1015,60 @@ class TestsetGenerator:
         testsets = []
         for sample, additional_info in zip(eval_samples, additional_testset_info):
             testsets.append(TestsetSample(eval_sample=sample, **additional_info))
+
+        # Add translations if additional languages are requested
+        if languages and len(languages) > 1:
+            # Filter out English from target languages
+            target_languages = [lang for lang in languages if lang != "en"]
+            if target_languages:
+                logger.info(f"Adding translations for languages: {target_languages}")
+
+                # Create translator
+                translator = MultiLanguageTranslator(
+                    self.llm, source_language="English"
+                )
+
+                # Translate each sample
+                for testset_sample in testsets:
+                    eval_sample = testset_sample.eval_sample
+
+                    # Prepare translations for this sample
+                    sample_translations = {}
+
+                    # Translate user_input if it exists
+                    if hasattr(eval_sample, "user_input") and eval_sample.user_input:
+                        user_input_translations = (
+                            await translator.translate_to_languages(
+                                eval_sample.user_input, target_languages
+                            )
+                        )
+                        for lang in target_languages:
+                            if lang not in sample_translations:
+                                sample_translations[lang] = {}
+                            sample_translations[lang]["user_input"] = (
+                                user_input_translations[lang]
+                            )
+
+                    # Translate reference if it exists
+                    if hasattr(eval_sample, "reference") and eval_sample.reference:
+                        reference_translations = (
+                            await translator.translate_to_languages(
+                                eval_sample.reference, target_languages
+                            )
+                        )
+                        for lang in target_languages:
+                            if lang not in sample_translations:
+                                sample_translations[lang] = {}
+                            sample_translations[lang]["reference"] = (
+                                reference_translations[lang]
+                            )
+
+                    # Add translation fields to the eval_sample
+                    if sample_translations:
+                        eval_sample.add_translation_fields(sample_translations)
+
+                logger.info("✅ Translation completed for all samples")
+
         testset = Testset(samples=testsets, cost_cb=cost_cb)
         testset_generation_rm.on_chain_end({"testset": testset})
 

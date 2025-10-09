@@ -31,6 +31,9 @@ class BaseSample(BaseModel):
     Base class for evaluation samples.
     """
 
+    # Allow extra fields for dynamic translation fields
+    model_config = {"extra": "allow"}
+
     def to_dict(self) -> t.Dict:
         """
         Get the dictionary representation of the sample without attributes that are None.
@@ -42,6 +45,23 @@ class BaseSample(BaseModel):
         Get the features of the sample that are not None.
         """
         return list(self.to_dict().keys())
+
+    def add_translation_fields(
+        self, translations: t.Dict[str, t.Dict[str, str]]
+    ) -> None:
+        """
+        Add translation fields to the sample dynamically.
+
+        Args:
+            translations: Dictionary mapping language codes to field translations
+                         e.g., {"th": {"user_input": "translated_query", "reference": "translated_answer"}}
+        """
+        for lang_code, field_translations in translations.items():
+            for field_name, translated_text in field_translations.items():
+                # Create dynamic field name like "user_input_th"
+                dynamic_field_name = f"{field_name}_{lang_code}"
+                # Set the field value using setattr
+                setattr(self, dynamic_field_name, translated_text)
 
     def to_string(self) -> str:
         """
