@@ -28,16 +28,52 @@ def create_predefined_personas() -> List[Persona]:
 
     personas = [
         Persona(
-            name="Newbie Farmer",
-            role_description="A beginner farmer with limited experience in agriculture, just starting their farming journey. Has basic knowledge of plant care but lacks experience in identifying pests and diseases. Eager to learn and asks many questions about farming practices. Needs simple, clear explanations and step-by-step guidance. Often confused by technical terms and prefers practical, easy-to-understand advice. Limited budget and resources, wants to learn cost-effective solutions. Relies heavily on advice from experienced farmers and agricultural resources.",
-        ),
-        Persona(
             name="Experienced Farmer",
             role_description="A seasoned farmer with 15+ years of experience in crop cultivation, pest management, and sustainable farming practices. Has worked with various crops including rice, vegetables, and fruits. Experienced in identifying plant diseases, managing pests naturally, and optimizing crop yields through traditional and modern techniques. Practical and experience-based thinking, prefers proven methods but open to new techniques that show clear benefits. Focuses on cost-effective solutions and long-term soil health. Limited budget for expensive treatments, prefers environmentally-friendly solutions, needs methods that work in local climate conditions.",
         ),
         Persona(
             name="Durian Orchard Manager",
             role_description="A specialized orchard manager focused on durian cultivation, with expertise in tropical fruit tree management and commercial durian production. Manages a 50-hectare durian orchard with multiple varieties. Expert in durian tree care, flowering cycles, fruit development, and post-harvest handling. Knowledgeable about durian-specific pests and diseases. Detail-oriented and systematic approach, focuses on maximizing fruit quality and yield. Stays updated with latest research on durian cultivation and market trends. Must maintain high fruit quality standards for premium market, seasonal labor management challenges, weather-dependent operations, need to balance organic practices with commercial viability.",
+        ),
+        Persona(
+            name="Urban Home Gardener",
+            role_description="An individual living in the city with limited space for farming, mainly growing vegetables, herbs, and small fruit trees in pots or rooftop gardens. Has moderate knowledge of plant care but struggles with pest control in confined environments. Interested in organic methods and DIY solutions due to concerns about chemical use in small spaces. Wants practical, space-saving techniques and cost-effective tools. Values quick tips and step-by-step visual instructions. Often shares experiences online and learns from gardening communities and social media.",
+        ),
+        Persona(
+            name="Agri-Entrepreneur",
+            role_description="A young business-minded individual aiming to build a profitable farming venture. Focused on high-value crops such as organic vegetables, specialty fruits, or greenhouse farming. Very interested in using technology, IoT devices, and data to optimize crop production. Has limited hands-on farming experience but strong knowledge of market trends and customer needs. Prefers structured advice and proven business models over trial-and-error farming. Concerned about investment risk, return on investment, and scaling the business. Seeks innovative but practical farming strategies.",
+        ),
+        Persona(
+            name="Village Elder Farmer",
+            role_description="An older farmer with decades of experience in traditional farming methods. Deeply knowledgeable about local soil, seasonal cycles, and indigenous farming practices. Prefers tried-and-true methods but curious about how modern solutions might complement traditional practices. Often respected as a mentor in the community, sharing wisdom with younger farmers. Has limited access to modern equipment and digital platforms. Needs explanations that bridge traditional knowledge with new approaches. Values community well-being and sustainable practices over purely commercial gains.",
+        ),
+        Persona(
+            name="Smallholder Durian Grower",
+            role_description="A farmer who owns a small durian plot of 2–5 hectares, growing mixed varieties. Has basic knowledge of durian cultivation but struggles with pest and disease management. Concerned about cost of fertilizers and pesticides, prefers low-cost, practical solutions. Often learns from neighbors or local cooperatives. Needs simple, actionable guidance on pruning, fertilization schedules, and pest prevention to improve fruit quality and yield while keeping expenses low.",
+        ),
+        Persona(
+            name="Commercial Durian Exporter",
+            role_description="A business-oriented farmer managing durian orchards for export markets such as China and Singapore. Focused on premium durian varieties like Musang King or Monthong. Knowledgeable about durian flowering cycles, fruit grading, and post-harvest handling standards required for export. Interested in advanced farming practices such as irrigation systems, nutrient monitoring, and integrated pest management. Needs advice on meeting international quality certifications, controlling pesticide residues, and ensuring consistent fruit supply.",
+        ),
+        Persona(
+            name="Durian Research Specialist",
+            role_description="An agricultural researcher working closely with universities or government institutes, specializing in durian breeding, disease resistance, and soil management. Familiar with latest scientific findings on Phytophthora, stem canker, and other durian-specific diseases. Advocates for sustainable and environmentally friendly farming practices. Needs detailed technical data, scientific references, and innovative methods to share with farmers. Plays a key role in bridging research with practical orchard management.",
+        ),
+        Persona(
+            name="Durian Enthusiast Hobbyist",
+            role_description="An urban professional who loves durians and has recently started planting a few durian trees in their backyard or small family plot. Limited farming experience, relies heavily on online tutorials and community forums. Needs beginner-friendly, step-by-step advice on soil preparation, watering schedules, and early-stage pest control. Focused on personal satisfaction and enjoying homegrown durians rather than commercial profit. Curious about using modern tools like gardening apps or smart irrigation kits.",
+        ),
+        Persona(
+            name="Durian Cooperative Leader",
+            role_description="A mid-scale farmer managing 10-20 hectares and actively involved in a local durian growers' cooperative. Experienced in orchard management and familiar with common pests and diseases. Works to unify local farmers for better bargaining power, shared resources, and collective solutions to pest outbreaks. Needs practical, scalable strategies that can be communicated to multiple farmers. Strong interest in government policies, subsidies, and group certifications for sustainable durian farming.",
+        ),
+        Persona(
+            name="Government Extension Officer",
+            role_description="An agricultural officer responsible for advising durian farmers in a rural province. Has good general knowledge of horticulture and some training in durian-specific cultivation practices. Provides workshops, distributes manuals, and connects farmers to research institutions. Needs concise, science-backed information that can be easily translated into farmer-friendly language. Balances between promoting modern techniques and respecting local farming traditions. Focused on improving community livelihoods and increasing durian yields for regional markets.",
+        ),
+        Persona(
+            name="Newbie Farmer",
+            role_description="A beginner farmer with limited experience in agriculture, just starting their farming journey. Has basic knowledge of plant care but lacks experience in identifying pests and diseases. Eager to learn and asks many questions about farming practices. Needs simple, clear explanations and step-by-step guidance. Often confused by technical terms and prefers practical, easy-to-understand advice. Limited budget and resources, wants to learn cost-effective solutions. Relies heavily on advice from experienced farmers and agricultural resources.",
         ),
     ]
 
@@ -281,8 +317,8 @@ if __name__ == "__main__":
     input_name = "input_17_pest_and_disease"
     kg_name = "pad_17doc_dedup"
     testset_size = 100
-    index = 0
-    dataset_name = f"pad_17doc_perfect_grammar_th_{testset_size}_{index}"
+    index = 5
+    dataset_name = f"pad_17doc_{testset_size}_{index}"
     llm_name = "gemini-2.0-flash"
     embedding_model_name = "models/text-embedding-004"
     # Configure languages - add "th" for Thai translations
