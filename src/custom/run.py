@@ -5,8 +5,8 @@ from typing import List, Optional, cast
 from langchain_community.document_loaders import DirectoryLoader
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
-from langfuse.callback import CallbackHandler
-from langfuse.decorators import langfuse_context, observe
+from langfuse.langchain import CallbackHandler
+from langfuse import observe
 from loguru import logger
 from pydantic import SecretStr
 
@@ -20,7 +20,7 @@ from ragas.testset.synthesizers import (
     SingleHopSpecificQuerySynthesizer,
 )
 from ragas.testset.synthesizers.generate import IncrementalSaveConfig
-from src.settings import settings
+from settings import settings
 
 
 def create_predefined_personas() -> List[Persona]:
@@ -98,6 +98,7 @@ async def run_testset_generation(
 
     # Setup LangFuse tracing via environment variables
     langfuse_handler = None
+    langfuse_client = None
     if settings.langfuse_tracing.lower() == "true":
         if not settings.langfuse_secret_key or not settings.langfuse_public_key:
             logger.error(
@@ -111,8 +112,10 @@ async def run_testset_generation(
             os.environ["LANGFUSE_HOST"] = settings.langfuse_host
             logger.info(f"LangFuse tracing enabled for dataset: {dataset_name}")
 
-            # Set trace metadata and tags using langfuse_context
-            langfuse_context.update_current_trace(
+            # Set trace metadata and tags using langfuse client
+            from langfuse import Langfuse
+            langfuse_client = Langfuse()
+            langfuse_client.update_current_trace(
                 name=f"testset_generation_{dataset_name}",
                 metadata={
                     "dataset_name": dataset_name,
@@ -234,7 +237,7 @@ async def run_testset_generation(
             logger.info("Flushing LangFuse traces...")
             try:
                 langfuse_handler.flush()
-                langfuse_context.flush()
+                langfuse_client.flush()
                 logger.info("✅ LangFuse traces flushed successfully")
             except Exception as flush_error:
                 logger.error(f"❌ Error flushing Langfuse traces: {flush_error}")
@@ -316,8 +319,8 @@ if __name__ == "__main__":
 
     input_name = "input_17_pest_and_disease"
     kg_name = "pad_17doc_dedup"
-    testset_size = 100
-    index = 5
+    testset_size = 10
+    index = 0
     dataset_name = f"pad_17doc_{testset_size}_{index}"
     llm_name = "gemini-2.0-flash"
     embedding_model_name = "models/text-embedding-004"

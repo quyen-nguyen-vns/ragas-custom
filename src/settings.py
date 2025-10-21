@@ -83,6 +83,11 @@ class ProjectSettings(LLMSettings, LangFuseSettings, AWSSettings, DynamoDBSettin
     data_input_dir: Path = Path("cache/data/input")
     intermediate_dir: Path = Path("cache/data/intermediate")
     kg_store_dir: Path = Path("cache/data/kg")
+    
+    # Tagging evaluation paths
+    tagging_cache_dir: Path = Path("cache/tagging_cache")
+    eval_input_path: Path = Path("cache/eval_set_v0_with_sources.json")
+    eval_output_path: Path = Path("cache/eval_set_v0_with_quality.json")
 
 
 settings = ProjectSettings()
