@@ -199,9 +199,6 @@ async def run_testset_generation(
             raise_exceptions=False,  # Don't raise exceptions, handle them gracefully
             languages=languages,
         )
-        # Log the type of dataset returned
-        logger.info(f"Dataset type: {type(dataset)}")
-        logger.info(f"Dataset attributes: {dir(dataset)}")
 
         # Save and display the generated dataset
         await save_dataset(dataset=dataset, dataset_name=dataset_name)

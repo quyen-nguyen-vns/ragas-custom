@@ -896,6 +896,19 @@ class TestsetGenerator:
             [prob for _, prob in query_distribution], testset_size
         )
         for i, (scenario, _) in enumerate(query_distribution):
+            # Skip synthesizers with 0 splits to avoid errors
+            if splits[i] == 0:
+                logger.info(
+                    f"Skipping {scenario.name} as it has 0 samples to generate (probability too low for testset_size)"
+                )
+
+                # Submit empty list to maintain index alignment
+                async def empty_scenarios():
+                    return []
+
+                exec.submit(empty_scenarios)
+                continue
+
             # Wrap scenario generation to save scenarios incrementally
             if save_callback:
 

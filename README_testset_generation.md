@@ -291,10 +291,6 @@ For issues or questions:
 3. Verify all environment variables are set correctly
 4. Ensure input documents meet minimum requirements
 
-## Related Files
-
-- `src/custom/run.py`: Main testset generation script
-- `src/custom/run.sh`: Shell script wrapper
-- `cache/persona.json`: Persona definitions
-- `src/settings.py`: Configuration settings
-
+## Documentation
+- [Ragas's Core Concepts](https://docs.ragas.io/en/stable/concepts/test_data_generation/rag/)
+- [Confluence](https://vns-site.atlassian.net/wiki/spaces/AIS/pages/74678914/KES+Evaluation+Set+-+V0)
