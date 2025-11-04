@@ -196,6 +196,9 @@ class KnowledgeGraph:
         if isinstance(path, str):
             path = Path(path)
 
+        # Ensure parent directory exists
+        path.parent.mkdir(parents=True, exist_ok=True)
+
         data = {
             "nodes": [node.model_dump() for node in self.nodes],
             "relationships": [rel.model_dump() for rel in self.relationships],

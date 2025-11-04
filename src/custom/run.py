@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 from typing import List, Optional, cast
@@ -5,8 +6,8 @@ from typing import List, Optional, cast
 from langchain_community.document_loaders import DirectoryLoader
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
-from langfuse.langchain import CallbackHandler
 from langfuse import observe
+from langfuse.langchain import CallbackHandler
 from loguru import logger
 from pydantic import SecretStr
 
@@ -15,67 +16,28 @@ from ragas.llms import LangchainLLMWrapper
 from ragas.testset import TestsetGenerator
 from ragas.testset.persona import Persona
 from ragas.testset.synthesizers import (
-    MultiHopAbstractQuerySynthesizer,
     MultiHopSpecificQuerySynthesizer,
     SingleHopSpecificQuerySynthesizer,
 )
 from ragas.testset.synthesizers.generate import IncrementalSaveConfig
+from ragas.testset.synthesizers.multi_hop import MultiHopAbstractQuerySynthesizer
 from settings import settings
 
 
-def create_predefined_personas() -> List[Persona]:
+def create_predefined_personas(
+    file_path: str = "cache/persona.json", num_personas: int = 3
+) -> List[Persona]:
     """Create pre-defined personas for testset generation."""
 
-    personas = [
-        Persona(
-            name="Experienced Farmer",
-            role_description="A seasoned farmer with 15+ years of experience in crop cultivation, pest management, and sustainable farming practices. Has worked with various crops including rice, vegetables, and fruits. Experienced in identifying plant diseases, managing pests naturally, and optimizing crop yields through traditional and modern techniques. Practical and experience-based thinking, prefers proven methods but open to new techniques that show clear benefits. Focuses on cost-effective solutions and long-term soil health. Limited budget for expensive treatments, prefers environmentally-friendly solutions, needs methods that work in local climate conditions.",
-        ),
-        Persona(
-            name="Durian Orchard Manager",
-            role_description="A specialized orchard manager focused on durian cultivation, with expertise in tropical fruit tree management and commercial durian production. Manages a 50-hectare durian orchard with multiple varieties. Expert in durian tree care, flowering cycles, fruit development, and post-harvest handling. Knowledgeable about durian-specific pests and diseases. Detail-oriented and systematic approach, focuses on maximizing fruit quality and yield. Stays updated with latest research on durian cultivation and market trends. Must maintain high fruit quality standards for premium market, seasonal labor management challenges, weather-dependent operations, need to balance organic practices with commercial viability.",
-        ),
-        Persona(
-            name="Urban Home Gardener",
-            role_description="An individual living in the city with limited space for farming, mainly growing vegetables, herbs, and small fruit trees in pots or rooftop gardens. Has moderate knowledge of plant care but struggles with pest control in confined environments. Interested in organic methods and DIY solutions due to concerns about chemical use in small spaces. Wants practical, space-saving techniques and cost-effective tools. Values quick tips and step-by-step visual instructions. Often shares experiences online and learns from gardening communities and social media.",
-        ),
-        Persona(
-            name="Agri-Entrepreneur",
-            role_description="A young business-minded individual aiming to build a profitable farming venture. Focused on high-value crops such as organic vegetables, specialty fruits, or greenhouse farming. Very interested in using technology, IoT devices, and data to optimize crop production. Has limited hands-on farming experience but strong knowledge of market trends and customer needs. Prefers structured advice and proven business models over trial-and-error farming. Concerned about investment risk, return on investment, and scaling the business. Seeks innovative but practical farming strategies.",
-        ),
-        Persona(
-            name="Village Elder Farmer",
-            role_description="An older farmer with decades of experience in traditional farming methods. Deeply knowledgeable about local soil, seasonal cycles, and indigenous farming practices. Prefers tried-and-true methods but curious about how modern solutions might complement traditional practices. Often respected as a mentor in the community, sharing wisdom with younger farmers. Has limited access to modern equipment and digital platforms. Needs explanations that bridge traditional knowledge with new approaches. Values community well-being and sustainable practices over purely commercial gains.",
-        ),
-        Persona(
-            name="Smallholder Durian Grower",
-            role_description="A farmer who owns a small durian plot of 2–5 hectares, growing mixed varieties. Has basic knowledge of durian cultivation but struggles with pest and disease management. Concerned about cost of fertilizers and pesticides, prefers low-cost, practical solutions. Often learns from neighbors or local cooperatives. Needs simple, actionable guidance on pruning, fertilization schedules, and pest prevention to improve fruit quality and yield while keeping expenses low.",
-        ),
-        Persona(
-            name="Commercial Durian Exporter",
-            role_description="A business-oriented farmer managing durian orchards for export markets such as China and Singapore. Focused on premium durian varieties like Musang King or Monthong. Knowledgeable about durian flowering cycles, fruit grading, and post-harvest handling standards required for export. Interested in advanced farming practices such as irrigation systems, nutrient monitoring, and integrated pest management. Needs advice on meeting international quality certifications, controlling pesticide residues, and ensuring consistent fruit supply.",
-        ),
-        Persona(
-            name="Durian Research Specialist",
-            role_description="An agricultural researcher working closely with universities or government institutes, specializing in durian breeding, disease resistance, and soil management. Familiar with latest scientific findings on Phytophthora, stem canker, and other durian-specific diseases. Advocates for sustainable and environmentally friendly farming practices. Needs detailed technical data, scientific references, and innovative methods to share with farmers. Plays a key role in bridging research with practical orchard management.",
-        ),
-        Persona(
-            name="Durian Enthusiast Hobbyist",
-            role_description="An urban professional who loves durians and has recently started planting a few durian trees in their backyard or small family plot. Limited farming experience, relies heavily on online tutorials and community forums. Needs beginner-friendly, step-by-step advice on soil preparation, watering schedules, and early-stage pest control. Focused on personal satisfaction and enjoying homegrown durians rather than commercial profit. Curious about using modern tools like gardening apps or smart irrigation kits.",
-        ),
-        Persona(
-            name="Durian Cooperative Leader",
-            role_description="A mid-scale farmer managing 10-20 hectares and actively involved in a local durian growers' cooperative. Experienced in orchard management and familiar with common pests and diseases. Works to unify local farmers for better bargaining power, shared resources, and collective solutions to pest outbreaks. Needs practical, scalable strategies that can be communicated to multiple farmers. Strong interest in government policies, subsidies, and group certifications for sustainable durian farming.",
-        ),
-        Persona(
-            name="Government Extension Officer",
-            role_description="An agricultural officer responsible for advising durian farmers in a rural province. Has good general knowledge of horticulture and some training in durian-specific cultivation practices. Provides workshops, distributes manuals, and connects farmers to research institutions. Needs concise, science-backed information that can be easily translated into farmer-friendly language. Balances between promoting modern techniques and respecting local farming traditions. Focused on improving community livelihoods and increasing durian yields for regional markets.",
-        ),
-        Persona(
-            name="Newbie Farmer",
-            role_description="A beginner farmer with limited experience in agriculture, just starting their farming journey. Has basic knowledge of plant care but lacks experience in identifying pests and diseases. Eager to learn and asks many questions about farming practices. Needs simple, clear explanations and step-by-step guidance. Often confused by technical terms and prefers practical, easy-to-understand advice. Limited budget and resources, wants to learn cost-effective solutions. Relies heavily on advice from experienced farmers and agricultural resources.",
-        ),
-    ]
+    data = json.load(open(file_path))
+    personas = []
+    for item in data[:num_personas]:
+        personas.append(
+            Persona(
+                name=item["name"],
+                role_description=item["role_description"],
+            )
+        )
 
     return personas
 
@@ -89,6 +51,11 @@ async def run_testset_generation(
     llm_name: str,
     embedding_model_name: str,
     languages: Optional[List[str]] = None,
+    single_hop_probability: float = 0.7,
+    multi_hop_probability: float = 0.3,
+    multi_hop_abstract_probability: float = 0,
+    persona_file_path: str = "cache/persona.json",
+    num_personas: int = 3,
 ):
     """Main function to generate test dataset."""
 
@@ -114,6 +81,7 @@ async def run_testset_generation(
 
             # Set trace metadata and tags using langfuse client
             from langfuse import Langfuse
+
             langfuse_client = Langfuse()
             langfuse_client.update_current_trace(
                 name=f"testset_generation_{dataset_name}",
@@ -169,13 +137,21 @@ async def run_testset_generation(
 
     # # define distribution of queries
     distribution = [
-        (SingleHopSpecificQuerySynthesizer(llm=generator_llm), 0.7),
-        (MultiHopSpecificQuerySynthesizer(llm=generator_llm), 0.2),
-        (MultiHopAbstractQuerySynthesizer(llm=generator_llm), 0.1),
+        (SingleHopSpecificQuerySynthesizer(llm=generator_llm), single_hop_probability),
+        (MultiHopSpecificQuerySynthesizer(llm=generator_llm), multi_hop_probability),
+        (
+            MultiHopAbstractQuerySynthesizer(llm=generator_llm),
+            multi_hop_abstract_probability,
+        ),
     ]
 
+    # Ensure kg_store_dir exists
+    settings.kg_store_dir.mkdir(parents=True, exist_ok=True)
+
     # Create pre-defined personas
-    predefined_personas = create_predefined_personas()
+    predefined_personas = create_predefined_personas(
+        file_path=persona_file_path, num_personas=num_personas
+    )
     logger.info(f"Created {len(predefined_personas)} pre-defined personas:")
     for persona in predefined_personas:
         logger.info(f"  - {persona.name}: {persona.role_description}")
@@ -187,14 +163,17 @@ async def run_testset_generation(
         persona_list=predefined_personas,
     )
 
-    # Configure incremental saving
+    # Configure incremental saving - ensure directory exists
+    intermediate_dir = settings.intermediate_dir / dataset_name
+    intermediate_dir.mkdir(parents=True, exist_ok=True)
+
     incremental_config = IncrementalSaveConfig(
         enabled=True,
         save_interval=1,  # Save after every sample
         save_scenarios=True,
         save_samples=True,
         save_partial_datasets=True,
-        intermediate_dir=settings.intermediate_dir / dataset_name,
+        intermediate_dir=intermediate_dir,
         cleanup_on_completion=False,  # Keep intermediate files for inspection
     )
 
@@ -215,7 +194,7 @@ async def run_testset_generation(
             kg_name=kg_name,
             incremental_save_config=incremental_config,
             dataset_name=dataset_name,
-            num_personas=3,
+            num_personas=num_personas,
             callbacks=callbacks,
             raise_exceptions=False,  # Don't raise exceptions, handle them gracefully
             languages=languages,
@@ -250,7 +229,7 @@ async def save_dataset(dataset, dataset_name: str):
 
     # Create output directory
     output_dir = settings.dataset_dir
-    output_dir.mkdir(exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     try:
         # Convert dataset to JSON format
@@ -317,24 +296,102 @@ async def save_dataset(dataset, dataset_name: str):
 if __name__ == "__main__":
     import asyncio
 
-    input_name = "input_17_pest_and_disease"
-    kg_name = "pad_17doc_dedup"
-    testset_size = 10
-    index = 0
-    dataset_name = f"pad_17doc_{testset_size}_{index}"
-    llm_name = "gemini-2.0-flash"
-    embedding_model_name = "models/text-embedding-004"
-    # Configure languages - add "th" for Thai translations
-    languages = ["en", "th"]  # English and Thai
+    parser = argparse.ArgumentParser(
+        description="Generate test dataset using Ragas testset generator"
+    )
+
+    # Required arguments
+    parser.add_argument(
+        "--input-name",
+        type=str,
+        required=True,
+        help="Name of the input directory containing documents",
+    )
+    parser.add_argument(
+        "--dataset-name",
+        type=str,
+        required=True,
+        help="Name for the generated dataset",
+    )
+    parser.add_argument(
+        "--kg-name",
+        type=str,
+        required=True,
+        help="Name for the knowledge graph",
+    )
+    parser.add_argument(
+        "--testset-size",
+        type=int,
+        required=True,
+        help="Number of test samples to generate",
+    )
+    parser.add_argument(
+        "--llm-name",
+        type=str,
+        required=True,
+        help="Name of the LLM model to use (e.g., 'gemini-2.0-flash')",
+    )
+    parser.add_argument(
+        "--embedding-model-name",
+        type=str,
+        required=True,
+        help="Name of the embedding model to use (e.g., 'models/text-embedding-004')",
+    )
+
+    # Optional arguments with defaults
+    parser.add_argument(
+        "--languages",
+        type=str,
+        nargs="+",
+        default=["en"],
+        help="List of languages for generation (default: ['en'])",
+    )
+    parser.add_argument(
+        "--single-hop-probability",
+        type=float,
+        default=0.7,
+        help="Probability for single-hop queries (default: 0.7)",
+    )
+    parser.add_argument(
+        "--multi-hop-probability",
+        type=float,
+        default=0.3,
+        help="Probability for multi-hop specific queries (default: 0.3)",
+    )
+    parser.add_argument(
+        "--multi-hop-abstract-probability",
+        type=float,
+        default=0.0,
+        help="Probability for multi-hop abstract queries (default: 0.0)",
+    )
+    parser.add_argument(
+        "--persona-file-path",
+        type=str,
+        default="cache/persona.json",
+        help="Path to the persona JSON file (default: 'cache/persona.json')",
+    )
+    parser.add_argument(
+        "--num-personas",
+        type=int,
+        default=3,
+        help="Number of personas to use from the persona file (default: 3)",
+    )
+
+    args = parser.parse_args()
 
     asyncio.run(
         run_testset_generation(
-            input_name=input_name,
-            dataset_name=dataset_name,
-            kg_name=kg_name,
-            testset_size=testset_size,
-            llm_name=llm_name,
-            embedding_model_name=embedding_model_name,
-            languages=languages,
+            input_name=args.input_name,
+            dataset_name=args.dataset_name,
+            kg_name=args.kg_name,
+            testset_size=args.testset_size,
+            llm_name=args.llm_name,
+            embedding_model_name=args.embedding_model_name,
+            languages=args.languages,
+            persona_file_path=args.persona_file_path,
+            num_personas=args.num_personas,
+            single_hop_probability=args.single_hop_probability,
+            multi_hop_probability=args.multi_hop_probability,
+            multi_hop_abstract_probability=args.multi_hop_abstract_probability,
         )
     )
